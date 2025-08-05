@@ -5,17 +5,18 @@ gpus=0
 
 #Set paths
 checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint1
-vis_root=/data/gyf/newtest/ChangeFormer/vis1/
+vis_root=/data/gyf/newtest/ChangeFormer/vis1/ #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
-img_size=256    
-batch_size=16   
+img_size=256    # 256x256 pixels.
+batch_size=16   # The model will process 16 pairs of images at once during each training step.
 lr=0.0001         
 max_epochs=200
 embed_dim=256
 
 net_G=ChangeFormerV6        #ChangeFormerV6 is the finalized verion
+                            # The G likely stands for "Generator.
 
 lr_policy=linear
 optimizer=adamw                 #Choices: sgd (set lr to 0.01), adam, adamw

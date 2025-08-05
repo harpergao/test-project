@@ -257,7 +257,7 @@ class ResNet(torch.nn.Module):
         x_8 = self.resnet.layer2(x_4) # 1/8, in=64, out=128
 
         if self.resnet_stages_num > 3:
-            x_8 = self.resnet.layer3(x_8) # 1/8, in=128, out=256
+            x_8 = self.resnet.layer3(x_8) # 1/16, in=128, out=256
 
         if self.resnet_stages_num == 5:
             x_8 = self.resnet.layer4(x_8) # 1/32, in=256, out=512
@@ -397,7 +397,13 @@ class BASE_Transformer(ResNet):
             x1 = self._forward_simple_decoder(x1, token1)
             x2 = self._forward_simple_decoder(x2, token2)
         # feature differencing
+        
+        # this zone will be rewritten in the future
+        
         x = torch.abs(x1 - x2)
+        
+        # ######
+        
         if not self.if_upsample_2x:
             x = self.upsamplex2(x)
         x = self.upsamplex4(x)
