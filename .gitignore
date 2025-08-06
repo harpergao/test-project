@@ -126,14 +126,14 @@ vis1/
 # ===============================
 # Custom files you added before
 # ===============================
+*.pyc              # Already listed, repeated to preserve your context
 
 # checkpoint files
 checkpoint/
 checkpoint1/
-
 *.pt
 *.pth
 *.zip
 *.tar
 *.ckpt
-*.pyc              # Already listed, repeated to preserve your context
+
