@@ -95,9 +95,20 @@ runs/
 __results__/
 __outputs__/
 checkpoints/
+checkpoint1/
+checkpoint2/
+checkpoint3/
 vis/
 vis1/
 *.out
+*.pt
+*.pth
+*.zip
+*.tar
+*.ckpt
+
+*.txt
+*.npy
 
 # ===============================
 # Image/video/audio files (output)
@@ -128,12 +139,5 @@ vis1/
 # ===============================
 *.pyc              # Already listed, repeated to preserve your context
 
-# checkpoint files
-checkpoint/
-checkpoint1/
-*.pt
-*.pth
-*.zip
-*.tar
-*.ckpt
+
 
