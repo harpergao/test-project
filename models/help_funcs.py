@@ -261,7 +261,7 @@ class SpatiotemporalAttentionFull(nn.Module):
         
     def forward(self, x1, x2):
         """
-        :param x: (b, c, h, w)
+        :param x: (b, c, h, w) 
         :param return_nl_map: if True return z, nl_map, else only return z.
         :return:
         """

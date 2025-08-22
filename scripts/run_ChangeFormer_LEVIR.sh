@@ -4,15 +4,15 @@
 gpus=0
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint1
-vis_root=/data/gyf/newtest/ChangeFormer/vis1/ #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
 img_size=256    # 256x256 pixels.
 batch_size=16   # The model will process 16 pairs of images at once during each training step.
 lr=0.0001         
-max_epochs=200
+max_epochs=201
 embed_dim=256
 
 net_G=ChangeFormerV6        #ChangeFormerV6 is the finalized verion
@@ -27,7 +27,9 @@ shuffle_AB=False
 
 #Initializing from pretrained weights
 # pretrain=/data/gyf/newtest/ChangeFormer/checkpoint/ChangeFormer_LEVIR/chck/best_ckpt.pt
-pretrain=/data/gyf/newtest/ChangeFormer/checkpoint1/CD_ChangeFormerV6_LEVIR_b16_lr0.0001_adamw_train_test_200_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/best_ckpt.pt
+# pretrain=/data/gyf/newtest/ChangeFormer/checkpoint1/CD_ChangeFormerV6_LEVIR_b16_lr0.0001_adamw_train_test_200_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/best_ckpt.pt
+pretrain=/data/gyf/newtest/ChangeFormer/checkpoint1/CD_ChangeFormerV6_LEVIR_b16_lr0.0001_adamw_train_test_200_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/last_ckpt.pt
+
 #Train and Validation splits
 split=train         #trainval
 split_val=test      #test

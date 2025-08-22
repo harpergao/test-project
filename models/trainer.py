@@ -141,8 +141,9 @@ class CDTrainer():
             checkpoint = torch.load(os.path.join(self.checkpoint_dir, ckpt_name),
                                     map_location=self.device)
             # update net_G states
-            self.net_G.load_state_dict(checkpoint['model_G_state_dict'])
+            self.net_G.load_state_dict(checkpoint['model_G_state_dict'], strict=False)
 
+            # 回到默认状态
             self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
             self.exp_lr_scheduler_G.load_state_dict(
                 checkpoint['exp_lr_scheduler_G_state_dict'])
