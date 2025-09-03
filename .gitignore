@@ -94,6 +94,7 @@ logs/
 runs/
 __results__/
 __outputs__/
+checkpoint/
 checkpoints/
 checkpoint1/
 checkpoint2/
@@ -109,7 +110,6 @@ vis1/
 
 *.txt
 *.npy
-
 
 # ===============================
 # Image/video/audio files (output)
@@ -138,7 +138,6 @@ vis1/
 # ===============================
 # Custom files you added before
 # ===============================
-*.pyc              # Already listed, repeated to preserve your context
 
 
 
