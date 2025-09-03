@@ -4,8 +4,8 @@
 gpus=0
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_transformer_pos_s4_dd8_2
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_transformer_pos_s4_dd8_2        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
@@ -15,7 +15,7 @@ lr=0.0001
 max_epochs=201
 embed_dim=256
 
-net_G=ChangeFormerV6        #ChangeFormerV6 is the finalized verion
+net_G=base_transformer_pos_s4_dd8        #ChangeFormerV6 is the finalized verion
                             # The G likely stands for "Generator.
 
 lr_policy=linear
@@ -28,11 +28,30 @@ shuffle_AB=False
 #Initializing from pretrained weights
 # pretrain=/data/gyf/newtest/ChangeFormer/checkpoint/ChangeFormer_LEVIR/chck/best_ckpt.pt
 # pretrain=/data/gyf/newtest/ChangeFormer/checkpoint1/CD_ChangeFormerV6_LEVIR_b16_lr0.0001_adamw_train_test_200_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/best_ckpt.pt
-pretrain=/data/gyf/newtest/ChangeFormer/checkpoint1/CD_ChangeFormerV6_LEVIR_b16_lr0.0001_adamw_train_test_200_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/last_ckpt.pt
-
+# pretrain=/data/gyf/newtest/ChangeFormer/checkpoint1/CD_ChangeFormerV6_LEVIR_b16_lr0.0001_adamw_train_test_200_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/last_ckpt.pt
 #Train and Validation splits
 split=train         #trainval
 split_val=test      #test
 project_name=CD_${net_G}_${data_name}_b${batch_size}_lr${lr}_${optimizer}_${split}_${split_val}_${max_epochs}_${lr_policy}_${loss}_multi_train_${multi_scale_train}_multi_infer_${multi_scale_infer}_shuffle_AB_${shuffle_AB}_embed_dim_${embed_dim}
 
-CUDA_VISIBLE_DEVICES=1 python main_cd.py --img_size ${img_size} --loss ${loss} --checkpoint_root ${checkpoint_root} --vis_root ${vis_root} --lr_policy ${lr_policy} --optimizer ${optimizer} --pretrain ${pretrain} --split ${split} --split_val ${split_val} --net_G ${net_G} --multi_scale_train ${multi_scale_train} --multi_scale_infer ${multi_scale_infer} --gpu_ids ${gpus} --max_epochs ${max_epochs} --project_name ${project_name} --batch_size ${batch_size} --shuffle_AB ${shuffle_AB} --data_name ${data_name}  --lr ${lr} --embed_dim ${embed_dim}
+CUDA_VISIBLE_DEVICES=1 python main_cd.py \
+ --img_size ${img_size} \
+ --loss ${loss} \
+ --checkpoint_root ${checkpoint_root} \
+ --vis_root ${vis_root}\
+ --lr_policy ${lr_policy} \
+ --optimizer ${optimizer}\
+ --split ${split} \
+ --split_val ${split_val} \
+ --net_G ${net_G}\
+ --multi_scale_train ${multi_scale_train}\
+ --multi_scale_infer ${multi_scale_infer}\
+ --gpu_ids ${gpus} \
+ --max_epochs ${max_epochs} \
+ --project_name ${project_name} \
+ --batch_size ${batch_size} \
+ --shuffle_AB ${shuffle_AB} \
+ --data_name ${data_name} \
+ --lr ${lr}\
+ --embed_dim ${embed_dim}
+# --pretrain ${pretrain}\

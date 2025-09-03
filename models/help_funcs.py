@@ -93,7 +93,8 @@ class Cross_Attention(nn.Module):
         mask_value = -torch.finfo(dots.dtype).max
 
         if mask is not None:
-            mask = F.pad(mask.flatten(1), (1, 0), value = True)
+            #(1, 0): 表示在最后一个维度的左边（开头）填充1个元素，右边（末尾）填充0个元素；value = True: 填充的值为 True
+            mask = F.pad(mask.flatten(1), (1, 0), value = True) 
             assert mask.shape[-1] == dots.shape[-1], 'mask has incorrect dimensions'
             mask = mask[:, None, :] * mask[:, :, None]
             dots.masked_fill_(~mask, mask_value)
@@ -132,7 +133,7 @@ class Attention(nn.Module):
         qkv = self.to_qkv(x).chunk(3, dim = -1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), qkv)
 
-        dots = torch.einsum('bhid,bhjd->bhij', q, k) * self.scale
+        dots = torch.einsum('bhid,bhjd->bhij', q, k) * self.scale #einsum 会将两个输入中相同且不在输出中出现的字母维度（这里是 d）进行相乘并求和
         mask_value = -torch.finfo(dots.dtype).max
 
         if mask is not None:
@@ -161,7 +162,7 @@ class Transformer(nn.Module):
                 Residual(PreNorm(dim, FeedForward(dim, mlp_dim, dropout = dropout)))
             ]))
     def forward(self, x, mask = None):
-        for attn, ff in self.layers:
+        for attn, ff in self.layers:    # attn取layers[0], ff取layers[1],即attn = Residual(PreNorm(Attention(...)))，ff = Residual(PreNorm(FeedForward(...)))
             x = attn(x, mask = mask)
             x = ff(x)
         return x

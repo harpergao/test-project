@@ -248,28 +248,29 @@ class ResNet(torch.nn.Module):
 
     def forward_single(self, x):
         # resnet layers
-        x = self.resnet.conv1(x)
+        x = self.resnet.conv1(x)    #1/2， in=3, out=64
         x = self.resnet.bn1(x)
         x = self.resnet.relu(x)
-        x = self.resnet.maxpool(x)
+        x = self.resnet.maxpool(x)  #1/4， in=64, out=64
 
         x_4 = self.resnet.layer1(x) # 1/4, in=64, out=64
         x_8 = self.resnet.layer2(x_4) # 1/8, in=64, out=128
 
         if self.resnet_stages_num > 3:
-            x_8 = self.resnet.layer3(x_8) # 1/16, in=128, out=256
+            x_8 = self.resnet.layer3(x_8) # 1/8, in=128, out=256
 
         if self.resnet_stages_num == 5:
-            x_8 = self.resnet.layer4(x_8) # 1/32, in=256, out=512
+            x_8 = self.resnet.layer4(x_8)
         elif self.resnet_stages_num > 5:
             raise NotImplementedError
 
         if self.if_upsample_2x:
-            x = self.upsamplex2(x_8)
+            x = self.upsamplex2(x_8)    #if stages_num < 5: 1/4, in=512, out=512
+                                        
         else:
             x = x_8
         # output layers
-        x = self.conv_pred(x)
+        x = self.conv_pred(x)   #stages_num < 5: 1/4, in=512, out=512
         return x
 
 
