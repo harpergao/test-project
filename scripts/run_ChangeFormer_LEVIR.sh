@@ -21,7 +21,7 @@ net_G=base_transformer_pos_s4_dd8        #ChangeFormerV6 is the finalized verion
 lr_policy=linear
 optimizer=adamw                 #Choices: sgd (set lr to 0.01), adam, adamw
 loss=ce                         #Choices: ce, fl (Focal Loss), miou
-multi_scale_train=True
+multi_scale_train=False
 multi_scale_infer=False
 shuffle_AB=False
 

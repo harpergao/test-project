@@ -9,7 +9,7 @@ import torch
 import torch.optim as optim
 import numpy as np
 from misc.metric_tool import ConfuseMatrixMeter
-from models.losses import cross_entropy
+from models.losses import cross_entropy, ImageRestorationLoss, FeatureSeparationLoss, ContentSimilarityLoss
 import models.losses as losses
 from models.losses import get_alpha, softmax_helper, FocalLoss, mIoULoss, mmIoULoss
 
@@ -117,6 +117,9 @@ class CDTrainer():
         else:
             raise NotImplemented(args.loss)
 
+        self.loss_rst = ImageRestorationLoss()
+        self.loss_sep = FeatureSeparationLoss()
+        self.loss_sim = ContentSimilarityLoss()
         # 加载之前保存的训练和验证准确率（train_acc.npy 和 val_acc.npy）。
         # 如果日志目录或可视化目录不存在，则创建这些目录
         self.VAL_ACC = np.array([], np.float32)
@@ -288,9 +291,17 @@ class CDTrainer():
     ##############################################################################
     def _forward_pass(self, batch):
         self.batch = batch
-        img_in1 = batch['A'].to(self.device)
-        img_in2 = batch['B'].to(self.device)
-        self.G_pred = self.net_G(img_in1, img_in2)
+        self.img_in1 = batch['A'].to(self.device)
+        self.img_in2 = batch['B'].to(self.device)
+        outputs = self.net_G(self.img_in1, self.img_in2)
+        self.G_pred = outputs['change_map']
+        # self.G_pred = self.net_G(img_in1, img_in2)
+        self.restored_t1 = outputs['restored_t1']
+        self.restored_t2 = outputs['restored_t2']
+        self.content_feat_t1 = outputs['content_feat_t1']
+        self.content_feat_t2 = outputs['content_feat_t2']
+        self.style_vec_t1 = outputs['style_vec_t1']
+        self.style_vec_t2 = outputs['style_vec_t2']
 
         if self.multi_scale_infer == "True":
             self.G_final_pred = torch.zeros(self.G_pred[-1].size()).to(self.device)
@@ -301,14 +312,19 @@ class CDTrainer():
                     self.G_final_pred = self.G_final_pred + pred
             self.G_final_pred = self.G_final_pred/len(self.G_pred)
         else:
-            self.G_final_pred = self.G_pred[-1]
+            if isinstance(self.G_pred, (list, tuple)):
+                self.G_final_pred = self.G_pred[-1]
+            else:
+                self.G_final_pred = self.G_pred
 
             
     def _backward_G(self):
         ### 4.10.2025
         # torch.backends.cudnn.enabled = False
 
-        gt = self.batch['L'].to(self.device).float()
+        gt = self.batch['L'].to(self.device)
+        
+        mask_unchanged = (gt == 0).float()
         # 多尺度训练
         if self.multi_scale_train == "True":
             i         = 0
@@ -319,10 +335,29 @@ class CDTrainer():
                 else:
                     temp_loss = temp_loss + self.weights[i]*self._pxl_loss(pred, gt)
                 i+=1
-            self.G_loss = temp_loss
+            self.loss_1 = temp_loss
         else:
-            self.G_loss = self._pxl_loss(self.G_pred[-1], gt)
-            
+            # self.G_loss = self._pxl_loss(self.G_pred[-1], gt)
+            self.loss_1 = self._pxl_loss(self.G_pred, gt)
+        
+        # 重建损失
+        loss_rst_t1 = self.loss_rst(self.restored_t1, self.img_in1)
+        loss_rst_t2 = self.loss_rst(self.restored_t2, self.img_in2)
+        self.loss_rst_value = (loss_rst_t1 + loss_rst_t2) / 2.0  
+        
+        # 内容一致性损失
+        self.sim_value = self.loss_sim(
+            self.content_feat_t1, 
+            self.content_feat_t2,
+            mask_unchanged
+        )
+        
+        # 特征分离损失
+        loss_sep_t1 = self.loss_sep(self.content_feat_t1, self.style_vec_t1)
+        loss_sep_t2 = self.loss_sep(self.content_feat_t2, self.style_vec_t2)
+        self.loss_sep_value = (loss_sep_t1 + loss_sep_t2) / 2.0
+
+        self.G_loss = self.loss_1 + 0.1 * self.loss_rst_value + 0.1 * self.sim_value + 0.1 * self.loss_sep_value
 
         self.G_loss.backward()
         

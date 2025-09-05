@@ -84,7 +84,7 @@ class CDEvaluator():
 
 
     def _visualize_pred(self):
-        pred = torch.argmax(self.G_pred, dim=1, keepdim=True)
+        pred = torch.argmax(self.G_pred['change_map'], dim=1, keepdim=True)
         pred_vis = pred * 255
         return pred_vis
 
@@ -94,7 +94,8 @@ class CDEvaluator():
         update metric
         """
         target = self.batch['L'].to(self.device).detach()
-        G_pred = self.G_pred.detach()
+
+        G_pred = self.G_pred['change_map'].detach()
         G_pred = torch.argmax(G_pred, dim=1)
 
         current_score = self.running_metric.update_cm(pr=G_pred.cpu().numpy(), gt=target.cpu().numpy())
@@ -151,7 +152,10 @@ class CDEvaluator():
         self.batch = batch
         img_in1 = batch['A'].to(self.device)
         img_in2 = batch['B'].to(self.device)
-        self.G_pred = self.net_G(img_in1, img_in2)[-1]
+        
+        self.G_pred = self.net_G(img_in1, img_in2)
+        if isinstance(self.G_pred, (list, tuple)):
+            self.G_pred = self.G_pred[-1]
 
     def eval_models(self,checkpoint_name='best_ckpt.pt'):
 

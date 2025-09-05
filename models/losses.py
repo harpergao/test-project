@@ -226,3 +226,188 @@ class mmIoULoss(nn.Module):
         #loss
         loss = -min_iou-torch.mean(iou)
         return loss
+
+
+class ImageRestorationLoss(nn.Module):
+    """
+    复现 "Harmony in diversity" (CCNet) 论文中的图像恢复损失 (L_rst)。
+    该损失计算恢复图像与原始输入图像之间的L1距离。
+    """
+    def __init__(self):
+        super(ImageRestorationLoss, self).__init__()
+        # 使用L1 Loss，计算像素级的平均绝对误差
+        self.l1_loss = nn.L1Loss()
+
+    def forward(self, restored_image, original_image):
+        """
+        前向传播。
+        :param restored_image: 解码器恢复出的图像张量。
+        :param original_image: 原始的输入图像张量。
+        :return: L1损失值。
+        """
+        return self.l1_loss(restored_image, original_image)
+
+def _channel_wise_correlation_matrix(features):
+    """
+    计算一个特征张量在通道维度上的相关系数矩阵。
+    :param features: 输入特征张量，形状为 (B, C, H, W)。
+    :return: 相关系数矩阵，形状为 (B, C, C)。
+    """
+    B, C, H, W = features.shape
+    # 将空间维度展平
+    features_flat = features.view(B, C, -1) # (B, C, H*W)
+    
+    # 计算每个通道的均值
+    mean = torch.mean(features_flat, dim=2, keepdim=True) # (B, C, 1)
+    
+    # 中心化
+    features_centered = features_flat - mean # (B, C, H*W)
+    
+    # 计算协方差矩阵
+    # (X^T * X) / (n-1)
+    # 这里我们用 (X * X^T) / (n-1) 来得到通道间的协方差
+    # (B, C, H*W) * (B, H*W, C) -> (B, C, C)
+    covariance_matrix = torch.bmm(features_centered, features_centered.transpose(1, 2)) / (H * W - 1)
+    
+    # 计算每个通道的标准差
+    std_dev = torch.std(features_flat, dim=2, keepdim=True) # (B, C, 1)
+    
+    # 计算标准差的外积，用于归一化协方差矩阵
+    # (B, C, 1) * (B, 1, C) -> (B, C, C)
+    std_dev_prod = torch.bmm(std_dev, std_dev.transpose(1, 2))
+    
+    # 防止除以零
+    std_dev_prod[std_dev_prod == 0] = 1e-8
+    
+    # 计算相关系数矩阵
+    correlation_matrix = covariance_matrix / std_dev_prod
+    
+    return correlation_matrix
+
+class FeatureSeparationLoss(nn.Module):
+    """
+    复现 "Harmony in diversity" (CCNet) 论文中的特征分离损失 (L_sep)。
+    该损失鼓励内容特征和风格特征的线性不相关性。
+    """
+    def __init__(self):
+        super(FeatureSeparationLoss, self).__init__()
+
+    def forward(self, content_features, style_features):
+        """
+        前向传播。
+        :param content_features: 最深层的内容特征图 (B, C, H, W)。
+        :param style_features: 风格特征向量 (B, C, 1, 1)。
+        :return: 特征分离损失值。
+        """
+        # 将风格向量广播到与内容特征图相同的空间尺寸
+        # 这是计算它们之间相关性的一种方式
+        B, C, H, W = content_features.shape
+        style_features_broadcasted = style_features.expand(-1, -1, H, W)
+        
+        # 将两个特征拼接起来
+        combined_features = torch.cat([content_features, style_features_broadcasted], dim=1) # (B, 2*C, H, W)
+        
+        # 计算组合特征的通道间相关性矩阵
+        corr_matrix = _channel_wise_correlation_matrix(combined_features) # (B, 2*C, 2*C)
+        
+        # 我们只关心内容和风格之间的互相关性
+        # 这部分位于相关性矩阵的非对角块
+        cross_correlation = corr_matrix[:, :C, C:]
+        
+        # 计算弗罗贝尼乌斯范数 (Frobenius norm)
+        # torch.linalg.norm(..., 'fro')
+        frobenius_norm = torch.linalg.matrix_norm(cross_correlation, ord='fro')
+        
+        # 论文中是对T1和T2的损失求和，这里我们返回单次计算的均值
+        return torch.mean(frobenius_norm)
+    
+    
+def sliced_wasserstein_distance(p1, p2, num_projections=50):
+    """
+    计算两组高维特征点之间的切片瓦瑟斯坦距离(Sliced Wasserstein Distance)。
+    :param p1: 第一组特征点，形状为 (n, d)，n为点的数量，d为特征维度。
+    :param p2: 第二组特征点，形状为 (m, d)，m为点的数量，d为特征维度。
+    :param num_projections: 随机投影的数量。
+    :return: 计算出的SWD标量值。
+    """
+    if p1.shape[0] == 0 or p2.shape[0] == 0:
+        return torch.tensor(0.0, device=p1.device)
+        
+    feature_dim = p1.shape[1]
+    
+    # 1. 生成随机投影方向
+    projections = torch.randn(feature_dim, num_projections, device=p1.device)
+    projections = F.normalize(projections, dim=0) # (d, num_projections)
+
+    # 2. 将特征点投影到一维
+    projected_p1 = torch.matmul(p1, projections) # (n, num_projections)
+    projected_p2 = torch.matmul(p2, projections) # (m, num_projections)
+
+    # 3. 对投影后的一维分布进行排序
+    sorted_p1, _ = torch.sort(projected_p1, dim=0)
+    sorted_p2, _ = torch.sort(projected_p2, dim=0)
+    
+    # 4. 计算排序后的一维分布之间的L1距离 (这是1D瓦瑟斯坦距离的直接计算)
+    # 为保证长度一致，我们将较短的分布插值到较长的长度
+    if sorted_p1.shape[0] != sorted_p2.shape[0]:
+        max_len = max(sorted_p1.shape[0], sorted_p2.shape[0])
+        sorted_p1 = F.interpolate(sorted_p1.unsqueeze(0).unsqueeze(0), size=(max_len, num_projections), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+        sorted_p2 = F.interpolate(sorted_p2.unsqueeze(0).unsqueeze(0), size=(max_len, num_projections), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
+
+    wasserstein_distance = torch.mean(torch.abs(sorted_p1 - sorted_p2))
+    
+    return wasserstein_distance
+
+
+class ContentSimilarityLoss(nn.Module):
+    """
+    复现 "Harmony in diversity" (CCNet) 论文中的内容相似度损失 (L_sim)。
+    该损失计算两个时相在未变化区域的内容特征之间的切片瓦瑟斯坦距离。
+    """
+    def __init__(self, num_projections=50):
+        super(ContentSimilarityLoss, self).__init__()
+        self.num_projections = num_projections
+
+    def forward(self, content_features1, content_features2, gt_change_map):
+        """
+        前向传播。
+        :param content_features1: T1时刻的内容特征图 (B, C, H, W)。
+        :param content_features2: T2时刻的内容特征图 (B, C, H, W)。
+        :param gt_change_map: 真实变化图标签 (B, 1, H_orig, W_orig)，1为变化，0为不变。
+        :return: 内容相似度损失值。
+        """
+        B, C, H, W = content_features1.shape
+        
+        # 1. 将GT标签图下采样到与特征图相同的空间尺寸
+        # 使用'nearest'模式以避免在标签中产生模糊的中间值
+        gt_mask = F.interpolate(gt_change_map.float(), size=(H, W), mode='nearest')
+
+        # 2. 创建"未变化区域"的掩码 (unchanged_mask)
+        # gt_mask中0代表不变，所以我们直接使用 (1.0 - gt_mask)
+        unchanged_mask = 1.0 - gt_mask # (B, 1, H, W)
+        
+        # 将特征图和掩码展平以便处理
+        # (B, C, H, W) -> (B, C, H*W) -> (B, H*W, C)
+        p1_flat = content_features1.view(B, C, -1).permute(0, 2, 1)
+        p2_flat = content_features2.view(B, C, -1).permute(0, 2, 1)
+        mask_flat = unchanged_mask.view(B, -1) # (B, H*W)
+        
+        total_loss = 0.0
+        # 3. 逐个样本计算损失 (因为每个样本的未变化像素数量不同)
+        for i in range(B):
+            # 找到当前样本中所有未变化像素的索引
+            unchanged_indices = torch.where(mask_flat[i] > 0.5)[0]
+            
+            if len(unchanged_indices) == 0:
+                continue # 如果没有未变化像素，则跳过
+            
+            # 提取未变化区域的特征向量
+            unchanged_p1 = p1_flat[i, unchanged_indices, :]
+            unchanged_p2 = p2_flat[i, unchanged_indices, :]
+            
+            # 4. 计算这两组特征之间的切片瓦瑟斯坦距离
+            loss_sample = sliced_wasserstein_distance(unchanged_p1, unchanged_p2, self.num_projections)
+            total_loss += loss_sample
+            
+        # 返回批次的平均损失
+        return total_loss / B

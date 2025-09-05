@@ -8,7 +8,7 @@ import functools
 from einops import rearrange
 
 import models
-from models.help_funcs import Transformer, TransformerDecoder, TwoLayerConv2d
+from models.help_funcs import Transformer, TransformerDecoder, TwoLayerConv2d, StyleEncoder, RestorationDecoder
 from models.ChangeFormer import ChangeFormerV1, ChangeFormerV2, ChangeFormerV3, ChangeFormerV4, ChangeFormerV5, ChangeFormerV6
 from models.SiamUnet_diff import SiamUnet_diff
 from models.SiamUnet_conc import SiamUnet_conc
@@ -250,28 +250,34 @@ class ResNet(torch.nn.Module):
         # resnet layers
         x = self.resnet.conv1(x)    #1/2， in=3, out=64
         x = self.resnet.bn1(x)
-        x = self.resnet.relu(x)
-        x = self.resnet.maxpool(x)  #1/4， in=64, out=64
+        c1 = self.resnet.relu(x)
+        x = self.resnet.maxpool(c1)  #1/4， in=64, out=64
 
-        x_4 = self.resnet.layer1(x) # 1/4, in=64, out=64
-        x_8 = self.resnet.layer2(x_4) # 1/8, in=64, out=128
+        c2 = self.resnet.layer1(x) # 1/4, in=64, out=64
+        c3 = self.resnet.layer2(c2) # 1/8, in=64, out=128
 
         if self.resnet_stages_num > 3:
-            x_8 = self.resnet.layer3(x_8) # 1/8, in=128, out=256
-
+            c4 = self.resnet.layer3(c3) # 1/8, in=128, out=256
+        else:
+            c4 = c3
         if self.resnet_stages_num == 5:
-            x_8 = self.resnet.layer4(x_8)
-        elif self.resnet_stages_num > 5:
+            c5 = self.resnet.layer4(c4)
+        else:
+            c5 = c4
+        if self.resnet_stages_num > 5:
             raise NotImplementedError
-
+        
+        content_features = [c4, c3, c2, c1]
+        feature_for_transformer = c4
+        
         if self.if_upsample_2x:
-            x = self.upsamplex2(x_8)    #if stages_num < 5: 1/4, in=512, out=512
+            x = self.upsamplex2(feature_for_transformer)    #if stages_num < 5: 1/4, in=512, out=512
                                         
         else:
-            x = x_8
+            x = feature_for_transformer
         # output layers
         x = self.conv_pred(x)   #stages_num < 5: 1/4, in=512, out=512
-        return x
+        return x, content_features
 
 
 class BASE_Transformer(ResNet):
@@ -325,6 +331,15 @@ class BASE_Transformer(ResNet):
         self.transformer_decoder = TransformerDecoder(dim=dim, depth=self.dec_depth,
                             heads=8, dim_head=self.decoder_dim_head, mlp_dim=mlp_dim, dropout=0,
                                                       softmax=decoder_softmax)
+        style_dim = 256
+        self.style_encoder1 =  StyleEncoder(in_channels=3, style_dim=style_dim) # style_dim需要与最深层内容特征通道数一致
+        self.style_encoder2 =  StyleEncoder(in_channels=3, style_dim=style_dim)
+
+        content_channels_list = [256, 128, 64, 64]
+        
+        self.restoration_decoder = RestorationDecoder(content_channels=content_channels_list[:resnet_stages_num],
+                                                      style_dim=style_dim,
+                                                      final_out_channels=input_nc)
 
     def _forward_semantic_tokens(self, x):
         b, c, h, w = x.shape
@@ -375,9 +390,17 @@ class BASE_Transformer(ResNet):
 
     def forward(self, x1, x2):
         # forward backbone resnet
-        x1 = self.forward_single(x1)
-        x2 = self.forward_single(x2)
+        
+        style1 = self.style_encoder1(x1)
+        style2 = self.style_encoder2(x2)
+        
+        x1, content_features1 = self.forward_single(x1)
+        x2, content_features2 = self.forward_single(x2)
 
+        
+        restored_x1 = self.restoration_decoder(content_features1, style1)
+        restored_x2 = self.restoration_decoder(content_features2, style2)
+        
         #  forward tokenzier
         if self.tokenizer:
             token1 = self._forward_semantic_tokens(x1)
@@ -400,7 +423,8 @@ class BASE_Transformer(ResNet):
         # feature differencing
         
         # this zone will be rewritten in the future
-        
+        x101 = x1
+        x201 = x2
         x = torch.abs(x1 - x2)
         
         # ######
@@ -412,8 +436,15 @@ class BASE_Transformer(ResNet):
         x = self.classifier(x)
         if self.output_sigmoid:
             x = self.sigmoid(x)
-        outputs = []
-        outputs.append(x)
+        outputs = {
+            "change_map": x,
+            "restored_t1": restored_x1,
+            "restored_t2": restored_x2,
+            "content_feat_t1": x101,
+            "content_feat_t2": x201,
+            "style_vec_t1": style1,
+            "style_vec_t2": style2
+        }
         return outputs
 
 
