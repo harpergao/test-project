@@ -10,6 +10,7 @@ from torch.utils import data
 
 from datasets.data_utils import CDDataAugmentation
 
+from torchvision.transforms import functional as TF
 
 """
 CD data set with pixel-level labels；

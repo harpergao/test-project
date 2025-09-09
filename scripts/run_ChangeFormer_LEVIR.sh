@@ -4,8 +4,8 @@
 gpus=0
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_transformer_pos_s4_dd8_2
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_transformer_pos_s4_dd8_2        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_transformer_pos_s4_dd8_3
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_transformer_pos_s4_dd8_3        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 

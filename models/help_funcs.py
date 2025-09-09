@@ -431,6 +431,7 @@ class RestorationDecoder(nn.Module):
 
         # 最终输出层，将特征图恢复到原始图像通道数
         self.final_conv = nn.Conv2d(content_channels[-1], final_out_channels, kernel_size=7, padding=3)
+        self.tanh = nn.Tanh() # 将输出像素值归一化到 [-1, 1]
 
     def forward(self, content_features, style_vector):
         """
@@ -456,5 +457,6 @@ class RestorationDecoder(nn.Module):
         # 最后一层上采样到原始尺寸
         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
         restored_image = self.final_conv(x)
+        restored_image = self.tanh(restored_image)
         
         return restored_image

@@ -83,6 +83,12 @@ class CDTrainer():
         self.pred_vis = None
         self.batch = None
         self.G_loss = None
+        
+        self.loss_1 = None
+        self.loss_rst_value = None
+        self.sim_value = None
+        self.loss_sep_value = None
+        
         self.is_training = False
         self.batch_id = 0
         self.epoch_id = 0
@@ -120,6 +126,7 @@ class CDTrainer():
         self.loss_rst = ImageRestorationLoss()
         self.loss_sep = FeatureSeparationLoss()
         self.loss_sim = ContentSimilarityLoss()
+        
         # 加载之前保存的训练和验证准确率（train_acc.npy 和 val_acc.npy）。
         # 如果日志目录或可视化目录不存在，则创建这些目录
         self.VAL_ACC = np.array([], np.float32)
@@ -184,6 +191,11 @@ class CDTrainer():
         pred = torch.argmax(self.G_final_pred, dim=1, keepdim=True)
         pred_vis = pred * 255
         return pred_vis
+    
+    def _visualize_recon(self):
+        recon_vis1 = de_norm(self.restored_t1)
+        recon_vis2 = de_norm(self.restored_t2)
+        return recon_vis1, recon_vis2
 
     def _save_checkpoint(self, ckpt_name):
         torch.save({
@@ -221,14 +233,17 @@ class CDTrainer():
         imps, est = self._timer_update()
         # 每 100 个 batch 输出一次训练日志：Is_training，当前 epoch 和 batchのid，已处理的样本数imps，估计剩余时间est，G_loss 和当前的 mf1 分数
         if np.mod(self.batch_id, 100) == 1:
-            message = 'Is_training: %s. [%d,%d][%d,%d], imps: %.2f, est: %.2fh, G_loss: %.5f, running_mf1: %.5f\n' %\
+            message = 'Is_training: %s. [%d,%d][%d,%d], imps: %.2f, est: %.2fh, G_loss: %.5f (G1: %.5f, G2: %.5f, G3: %.5f, G4: %.5f), running_mf1: %.5f\n' %\
                       (self.is_training, self.epoch_id, self.max_num_epochs-1, self.batch_id, m,
                      imps*self.batch_size, est,
-                     self.G_loss.item(), running_acc)
+                     self.G_loss.item(), self.loss_1.item(), self.loss_rst_value.item(), self.sim_value.item(), self.loss_sep_value.item(), running_acc)
             self.logger.write(message)
 
         # 每 500 个 batch 可视化一次 输入图像 A&B、预测结果pred 和真实标签gt
         if np.mod(self.batch_id, 500) == 1:
+            # ===================================================================
+            # 第一部分：保存变化检测的可视化结果
+            # ===================================================================
             vis_input = utils.make_numpy_grid(de_norm(self.batch['A']))
             vis_input2 = utils.make_numpy_grid(de_norm(self.batch['B']))
 
@@ -241,6 +256,20 @@ class CDTrainer():
                 self.vis_dir, 'istrain_'+str(self.is_training)+'_'+
                               str(self.epoch_id)+'_'+str(self.batch_id)+'.jpg')
             plt.imsave(file_name, vis)
+            # ===================================================================
+            # 第二部分:保存原图与重建图的对比结果
+            # ===================================================================
+            recon1, recon2 = self._visualize_recon()
+            vis_recon = utils.make_numpy_grid(recon1)
+            vis_recon2 = utils.make_numpy_grid(recon2)
+
+            vis_recon_comp = np.concatenate([vis_input, vis_recon, vis_input2, vis_recon2], axis=0)
+            vis_recon_comp = np.clip(vis_recon_comp, a_min=0.0, a_max=1.0)
+
+            file_name_recon = os.path.join(
+                self.vis_dir, 'RECON_istrain_'+str(self.is_training)+'_'+
+                            str(self.epoch_id)+'_'+str(self.batch_id)+'.jpg')
+            plt.imsave(file_name_recon, vis_recon_comp)
 
     def _collect_epoch_states(self):
         scores = self.running_metric.get_scores()

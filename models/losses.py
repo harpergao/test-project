@@ -286,40 +286,46 @@ def _channel_wise_correlation_matrix(features):
 
 class FeatureSeparationLoss(nn.Module):
     """
-    复现 "Harmony in diversity" (CCNet) 论文中的特征分离损失 (L_sep)。
-    该损失鼓励内容特征和风格特征的线性不相关性。
+    修正后的特征分离损失。
+    确保输入的内容特征和风格特征有相同的通道数 C。
     """
     def __init__(self):
         super(FeatureSeparationLoss, self).__init__()
 
     def forward(self, content_features, style_features):
         """
-        前向传播。
-        :param content_features: 最深层的内容特征图 (B, C, H, W)。
-        :param style_features: 风格特征向量 (B, C, 1, 1)。
-        :return: 特征分离损失值。
+        Args:
+            content_features (torch.Tensor): 内容特征图, 形状 (B, C, H, W)
+            style_features (torch.Tensor): 风格特征向量, 形状 (B, C, 1, 1)
         """
-        # 将风格向量广播到与内容特征图相同的空间尺寸
-        # 这是计算它们之间相关性的一种方式
+        # 验证通道数是否一致，这是先决条件
+        if content_features.shape[1] != style_features.shape[1]:
+            raise ValueError(f"内容特征通道数 ({content_features.shape[1]}) 与 "
+                             f"风格特征通道数 ({style_features.shape[1]}) 必须一致!")
+
         B, C, H, W = content_features.shape
-        style_features_broadcasted = style_features.expand(-1, -1, H, W)
         
-        # 将两个特征拼接起来
-        combined_features = torch.cat([content_features, style_features_broadcasted], dim=1) # (B, 2*C, H, W)
+        # 将风格特征广播到与内容特征相同的空间维度
+        style_features_expanded = style_features.expand_as(content_features)
         
-        # 计算组合特征的通道间相关性矩阵
-        corr_matrix = _channel_wise_correlation_matrix(combined_features) # (B, 2*C, 2*C)
+        # 展平空间维度，得到 (B, C, H*W)
+        content_flat = content_features.view(B, C, -1)
+        style_flat = style_features_expanded.view(B, C, -1)
         
-        # 我们只关心内容和风格之间的互相关性
-        # 这部分位于相关性矩阵的非对角块
-        cross_correlation = corr_matrix[:, :C, C:]
+        # 计算内容和风格特征之间的相关性矩阵
+        # torch.bmm 是批处理矩阵乘法
+        # (B, C, H*W) @ (B, H*W, C) -> 得到一个形状为 (B, C, C) 的相关性矩阵
+        correlation_matrix = torch.bmm(content_flat, style_flat.transpose(1, 2))
         
-        # 计算弗罗贝尼乌斯范数 (Frobenius norm)
-        # torch.linalg.norm(..., 'fro')
-        frobenius_norm = torch.linalg.matrix_norm(cross_correlation, ord='fro')
+        # 计算相关性矩阵的弗罗贝尼乌斯范数的平方。
+        # 这个值越小，代表C个内容通道和C个风格通道之间的相关性越低。
+        # 我们对范数取平方是为了让惩罚更强，且与L2损失形式上更一致。
+        frobenius_norm_sq = torch.sum(torch.pow(correlation_matrix, 2))
         
-        # 论文中是对T1和T2的损失求和，这里我们返回单次计算的均值
-        return torch.mean(frobenius_norm)
+        # 根据批次大小和维度进行归一化，防止损失值过大
+        loss = frobenius_norm_sq / (B * C * C)
+        
+        return loss
     
     
 def sliced_wasserstein_distance(p1, p2, num_projections=50):

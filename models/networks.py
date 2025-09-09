@@ -440,8 +440,8 @@ class BASE_Transformer(ResNet):
             "change_map": x,
             "restored_t1": restored_x1,
             "restored_t2": restored_x2,
-            "content_feat_t1": x101,
-            "content_feat_t2": x201,
+            "content_feat_t1": content_features1[0],  # 最深层的内容特征
+            "content_feat_t2": content_features2[0],
             "style_vec_t1": style1,
             "style_vec_t2": style2
         }
