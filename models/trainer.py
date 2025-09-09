@@ -40,7 +40,10 @@ class CDTrainer():
             print("CUDA is not available. Using CPU.")
         # Learning rate and Beta1 for Adam optimizers
         self.lr = args.lr
+        
 
+        self.log_sigmas_sq = nn.Parameter(torch.zeros(4, device=self.device))
+        
         # define optimizers
         if args.optimizer == "sgd":
             self.optimizer_G = optim.SGD(self.net_G.parameters(), lr=self.lr,
@@ -50,8 +53,21 @@ class CDTrainer():
             self.optimizer_G = optim.Adam(self.net_G.parameters(), lr=self.lr,
                                      weight_decay=0)
         elif args.optimizer == "adamw":
-            self.optimizer_G = optim.AdamW(self.net_G.parameters(), lr=self.lr,
-                                    betas=(0.9, 0.999), weight_decay=0.01)
+            model_params = {
+                'params': self.net_G.parameters(), 
+                'weight_decay': 0.01  # 对模型参数应用权重衰减
+            }
+            dynamic_weight_params = {
+            'params': [self.log_sigmas_sq], 
+            'weight_decay': 0.0  # 不对这个参数应用权重衰减
+            }
+            self.optimizer_G = optim.AdamW(
+                [model_params, dynamic_weight_params], 
+                lr=self.lr,
+                betas=(0.9, 0.999)
+            )
+            # self.optimizer_G = optim.AdamW(self.net_G.parameters(), lr=self.lr,
+            #                         betas=(0.9, 0.999), weight_decay=0.01)
 
         # self.optimizer_G = optim.Adam(self.net_G.parameters(), lr=self.lr)
 
@@ -233,10 +249,24 @@ class CDTrainer():
         imps, est = self._timer_update()
         # 每 100 个 batch 输出一次训练日志：Is_training，当前 epoch 和 batchのid，已处理的样本数imps，估计剩余时间est，G_loss 和当前的 mf1 分数
         if np.mod(self.batch_id, 100) == 1:
-            message = 'Is_training: %s. [%d,%d][%d,%d], imps: %.2f, est: %.2fh, G_loss: %.5f (G1: %.5f, G2: %.5f, G3: %.5f, G4: %.5f), running_mf1: %.5f\n' %\
-                      (self.is_training, self.epoch_id, self.max_num_epochs-1, self.batch_id, m,
-                     imps*self.batch_size, est,
-                     self.G_loss.item(), self.loss_1.item(), self.loss_rst_value.item(), self.sim_value.item(), self.loss_sep_value.item(), running_acc)
+            # # message = 'Is_training: %s. [%d,%d][%d,%d], imps: %.2f, est: %.2fh, G_loss: %.5f (G1: %.5f, G2: %.5f, G3: %.5f, G4: %.5f, [Var: %.5f]), running_mf1: %.5f\n' %\
+            #           (self.is_training, self.epoch_id, self.max_num_epochs-1, self.batch_id, m,
+            #          imps*self.batch_size, est,
+            #          self.G_loss.item(), self.loss_1.item(), self.loss_rst_value.item(), self.sim_value.item(), self.loss_sep_value.item(), torch.exp(self.log_sigmas_sq), running_acc)
+            variances = torch.exp(self.log_sigmas_sq)
+            message = 'Is_training: %s. [%d,%d][%d,%d], imps: %.2f, est: %.2fh, G_loss: %.5f (L1: %.5f, L_rst: %.5f, L_sim: %.5f, L_sep: %.5f), [Vars: %.3f, %.3f, %.3f, %.3f], running_mf1: %.5f\n' % \
+              (self.is_training, self.epoch_id, self.max_num_epochs-1, self.batch_id, m,
+               imps*self.batch_size, est,
+               self.G_loss.item(), # 使用 .item() 获取单个数值
+               self.loss_1.item(),
+               self.loss_rst_value.item(),
+               self.sim_value.item(),
+               self.loss_sep_value.item(),
+               variances[0].item(), # 将4个值的张量拆开
+               variances[1].item(),
+               variances[2].item(),
+               variances[3].item(),
+               running_acc)
             self.logger.write(message)
 
         # 每 500 个 batch 可视化一次 输入图像 A&B、预测结果pred 和真实标签gt
@@ -386,7 +416,19 @@ class CDTrainer():
         loss_sep_t2 = self.loss_sep(self.content_feat_t2, self.style_vec_t2)
         self.loss_sep_value = (loss_sep_t1 + loss_sep_t2) / 2.0
 
-        self.G_loss = self.loss_1 + 0.1 * self.loss_rst_value + 0.1 * self.sim_value + 0.1 * self.loss_sep_value
+        # self.G_loss = self.loss_1 + 0.1 * self.loss_rst_value + 0.1 * self.sim_value + 0.1 * self.loss_sep_value
+        
+        losses = [self.loss_1, self.loss_rst_value, self.sim_value, self.loss_sep_value]
+    
+        # 根据公式计算总损失: L_total = Σ (0.5 * exp(-log_sigma_sq) * L + 0.5 * log_sigma_sq)
+        precision = 0.5 * torch.exp(-self.log_sigmas_sq)
+        regularization = 0.5 * self.log_sigmas_sq
+
+        total_loss = 0
+        for i in range(len(losses)):
+            total_loss += precision[i] * losses[i] + regularization[i]
+        
+        self.G_loss = total_loss
 
         self.G_loss.backward()
         

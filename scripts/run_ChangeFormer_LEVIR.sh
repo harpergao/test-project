@@ -4,15 +4,15 @@
 gpus=0
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_transformer_pos_s4_dd8_3
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_transformer_pos_s4_dd8_3        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_transformer_pos_s4_dd8_4
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_transformer_pos_s4_dd8_4        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
 img_size=256    # 256x256 pixels.
 batch_size=16   # The model will process 16 pairs of images at once during each training step.
 lr=0.0001         
-max_epochs=201
+max_epochs=200
 embed_dim=256
 
 net_G=base_transformer_pos_s4_dd8        #ChangeFormerV6 is the finalized verion
