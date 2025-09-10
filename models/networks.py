@@ -199,9 +199,12 @@ class ResNet(torch.nn.Module):
         """
         super(ResNet, self).__init__()
         expand = 1
+        # if backbone == 'resnet18':
+        #     self.resnet = models.resnet18(pretrained=True,
+        #                                   replace_stride_with_dilation=[False,True,True])
         if backbone == 'resnet18':
-            self.resnet = models.resnet18(pretrained=True,
-                                          replace_stride_with_dilation=[False,True,True])
+            self.resnet = models.resnet18(pretrained=True
+                                        )
         elif backbone == 'resnet34':
             self.resnet = models.resnet34(pretrained=True,
                                           replace_stride_with_dilation=[False,True,True])
@@ -211,6 +214,10 @@ class ResNet(torch.nn.Module):
             expand = 4
         else:
             raise NotImplementedError
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(input_nc, 64)
+        )
+        
         self.relu = nn.ReLU()
         self.upsamplex2 = nn.Upsample(scale_factor=2)
         self.upsamplex4 = nn.Upsample(scale_factor=4, mode='bilinear')
@@ -248,36 +255,36 @@ class ResNet(torch.nn.Module):
 
     def forward_single(self, x):
         # resnet layers
-        x = self.resnet.conv1(x)    #1/2， in=3, out=64
+        outs = []
+        x = self.resnet.conv1(x) 
         x = self.resnet.bn1(x)
-        c1 = self.resnet.relu(x)
-        x = self.resnet.maxpool(c1)  #1/4， in=64, out=64
+        x = self.resnet.relu(x)
+        x = self.resnet.maxpool(x)
 
-        c2 = self.resnet.layer1(x) # 1/4, in=64, out=64
-        c3 = self.resnet.layer2(c2) # 1/8, in=64, out=128
+        x = self.resnet.layer1(x) # [B, 64, H/4, W/4]
+        outs.append(x)
+        x = self.resnet.layer2(x) # [B, 128, H/8, W/8]
+        outs.append(x)
 
         if self.resnet_stages_num > 3:
-            c4 = self.resnet.layer3(c3) # 1/8, in=128, out=256
-        else:
-            c4 = c3
+            x = self.resnet.layer3(x) # [B, 256, H/16, W/16]
+            outs.append(x)
         if self.resnet_stages_num == 5:
-            c5 = self.resnet.layer4(c4)
-        else:
-            c5 = c4
+            x = self.resnet.layer4(x)   # [B, 512, H/32, W/32]
+            outs.append(x)
         if self.resnet_stages_num > 5:
             raise NotImplementedError
         
-        content_features = [c4, c3, c2, c1]
-        feature_for_transformer = c4
-        
+        outs = outs[::-1]  # reverse, from deep to shallow
+
         if self.if_upsample_2x:
-            x = self.upsamplex2(feature_for_transformer)    #if stages_num < 5: 1/4, in=512, out=512
+            x = self.upsamplex2(x)    #if stages_num < 5: 1/4, in=512, out=512
                                         
         else:
-            x = feature_for_transformer
+            x = x
         # output layers
         x = self.conv_pred(x)   #stages_num < 5: 1/4, in=512, out=512
-        return x, content_features
+        return x, outs
 
 
 class BASE_Transformer(ResNet):
