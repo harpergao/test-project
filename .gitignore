@@ -2,7 +2,7 @@
 # Basic Python ignores
 # ===============================
 *.pyc              # Compiled Python files
-models/__pycache__/       # Python bytecode cache
+__pycache__/       # Python bytecode cache
 *.pyo
 *.pyd
 *$py.class
