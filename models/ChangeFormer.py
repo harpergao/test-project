@@ -1596,7 +1596,7 @@ class DecoderTransformer_v4(nn.Module):
         outputs = []
         # Stage 4: x1/32 scale
         
-        c4_1, c4_2 = self.STAttentionModule_c4(c4_1, c4_2)
+        # c4_1, c4_2 = self.STAttentionModule_c4(c4_1, c4_2)
         
         _c4_1 = self.linear_c4(c4_1).permute(0,2,1).reshape(n, -1, c4_1.shape[2], c4_1.shape[3])
         _c4_2 = self.linear_c4(c4_2).permute(0,2,1).reshape(n, -1, c4_2.shape[2], c4_2.shape[3])
@@ -1608,7 +1608,7 @@ class DecoderTransformer_v4(nn.Module):
 
         # Stage 3: x1/16 scale
         
-        c3_1, c3_2 = self.STAttentionModule_c3(c3_1, c3_2)
+        # c3_1, c3_2 = self.STAttentionModule_c3(c3_1, c3_2)
         
         _c3_1 = self.linear_c3(c3_1).permute(0,2,1).reshape(n, -1, c3_1.shape[2], c3_1.shape[3])
         _c3_2 = self.linear_c3(c3_2).permute(0,2,1).reshape(n, -1, c3_2.shape[2], c3_2.shape[3])
@@ -1619,7 +1619,7 @@ class DecoderTransformer_v4(nn.Module):
 
         # Stage 2: x1/8 scale
         
-        c2_1, c2_2 = self.STAttentionModule_c2(c2_1, c2_2)
+        # c2_1, c2_2 = self.STAttentionModule_c2(c2_1, c2_2)
         
         _c2_1 = self.linear_c2(c2_1).permute(0,2,1).reshape(n, -1, c2_1.shape[2], c2_1.shape[3])
         _c2_2 = self.linear_c2(c2_2).permute(0,2,1).reshape(n, -1, c2_2.shape[2], c2_2.shape[3])
@@ -1630,7 +1630,7 @@ class DecoderTransformer_v4(nn.Module):
 
         # Stage 1: x1/4 scale
         
-        c1_1, c1_2 = self.STAttentionModule_c1(c1_1, c1_2)
+        # c1_1, c1_2 = self.STAttentionModule_c1(c1_1, c1_2)
         
         _c1_1 = self.linear_c1(c1_1).permute(0,2,1).reshape(n, -1, c1_1.shape[2], c1_1.shape[3])
         _c1_2 = self.linear_c1(c1_2).permute(0,2,1).reshape(n, -1, c1_2.shape[2], c1_2.shape[3])

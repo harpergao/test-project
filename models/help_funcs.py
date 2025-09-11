@@ -297,4 +297,61 @@ class SpatiotemporalAttentionFull(nn.Module):
         return x1 + self.W(y1), x2 + self.W(y2)
 
 
+class DecoderBlock(nn.Module):
+    """
+    U-Net解码器的基础单元。
+    包含一次上采样，一次与跳跃连接特征的拼接，以及两个卷积层。
+    """
+    def __init__(self, in_channels, skip_channels, out_channels):
+        super().__init__()
+        # 上采样层，将宽高加倍，通道数减半
+        self.upconv = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        
+        # 卷积块，输入通道是上采样后的通道数 + 跳跃连接的通道数
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(in_channels // 2 + skip_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            # nn.BatchNorm2d(out_channels, eps=1e-4),
+            nn.InstanceNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            # nn.BatchNorm2d(out_channels, eps=1e-4),
+            nn.InstanceNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
 
+    def forward(self, x, skip_features):
+        x = self.upconv(x)
+        x = torch.cat([x, skip_features], dim=1)
+        x = self.conv_block(x)
+        return x
+    
+class ChangeDetectionDecoder(nn.Module):
+    def __init__(self, encoder_channels=[64, 128, 256, 512], decoder_channels=[256, 128, 64]):
+        super().__init__()
+        
+        # 编码器输出通道数，反向对应 c2, c3, c4, c5
+        enc_c2, enc_c3, enc_c4, enc_c5 = encoder_channels
+        
+        # 解码器各阶段输出通道数
+        dec_c1, dec_c2, dec_c3 = decoder_channels
+
+        # 解码器模块
+        self.decoder_block1 = DecoderBlock(enc_c5, enc_c4, dec_c1)
+        self.decoder_block2 = DecoderBlock(dec_c1, enc_c3, dec_c2)
+        self.decoder_block3 = DecoderBlock(dec_c2, enc_c2, dec_c3)
+        
+        # 最后的上采样和输出层
+        self.final_up = nn.ConvTranspose2d(dec_c3, dec_c3 // 2, kernel_size=2, stride=2)
+        self.output_conv = nn.Conv2d(dec_c3 // 2, 1, kernel_size=1) # 输出1个通道的变化图
+
+    def forward(self, x):
+        c2, c3, c4, c5 = x
+        
+        d1 = self.decoder_block1(c5, c4)  # c5(512)->d1(256)
+        d2 = self.decoder_block2(d1, c3)  # d1(256)->d2(128)
+        d3 = self.decoder_block3(d2, c2)  # d2(128)->d3(64)
+        
+        out = self.final_up(d3)
+        out = self.output_conv(out)
+        
+        return out

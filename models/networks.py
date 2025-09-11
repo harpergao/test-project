@@ -8,8 +8,8 @@ import functools
 from einops import rearrange
 
 import models
-from models.help_funcs import Transformer, TransformerDecoder, TwoLayerConv2d
-from models.ChangeFormer import ChangeFormerV1, ChangeFormerV2, ChangeFormerV3, ChangeFormerV4, ChangeFormerV5, ChangeFormerV6
+from models.help_funcs import Transformer, TransformerDecoder, TwoLayerConv2d, ChangeDetectionDecoder
+from models.ChangeFormer import ChangeFormerV1, ChangeFormerV2, ChangeFormerV3, ChangeFormerV4, ChangeFormerV5, ChangeFormerV6, TDec, DecoderTransformer_v4
 from models.SiamUnet_diff import SiamUnet_diff
 from models.SiamUnet_conc import SiamUnet_conc
 from models.Unet import Unet
@@ -127,6 +127,9 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
 def define_G(args, init_type='normal', init_gain=0.02, gpu_ids=[]):
     if args.net_G == 'base_resnet18':
         net = ResNet(input_nc=3, output_nc=2, output_sigmoid=False)
+    elif args.net_G == 'baseline_res':
+        net = BASE_Transformer(input_nc=3, output_nc=2, token_len=4, resnet_stages_num=5,
+                             with_pos='learned')
 
     elif args.net_G == 'base_transformer_pos_s4':
         net = BASE_Transformer(input_nc=3, output_nc=2, token_len=4, resnet_stages_num=4,
@@ -200,8 +203,8 @@ class ResNet(torch.nn.Module):
         super(ResNet, self).__init__()
         expand = 1
         if backbone == 'resnet18':
-            self.resnet = models.resnet18(pretrained=True,
-                                          replace_stride_with_dilation=[False,True,True])
+            self.resnet = models.resnet18(pretrained=True
+                                          )
         elif backbone == 'resnet34':
             self.resnet = models.resnet34(pretrained=True,
                                           replace_stride_with_dilation=[False,True,True])
@@ -248,30 +251,33 @@ class ResNet(torch.nn.Module):
 
     def forward_single(self, x):
         # resnet layers
+        outputs= []
         x = self.resnet.conv1(x)    #1/2， in=3, out=64
         x = self.resnet.bn1(x)
         x = self.resnet.relu(x)
         x = self.resnet.maxpool(x)  #1/4， in=64, out=64
 
         x_4 = self.resnet.layer1(x) # 1/4, in=64, out=64
+        outputs.append(x_4)
         x_8 = self.resnet.layer2(x_4) # 1/8, in=64, out=128
-
+        outputs.append(x_8)
         if self.resnet_stages_num > 3:
-            x_8 = self.resnet.layer3(x_8) # 1/8, in=128, out=256
-
+            x_8 = self.resnet.layer3(x_8) # 1/16, in=128, out=256
+            outputs.append(x_8)
         if self.resnet_stages_num == 5:
             x_8 = self.resnet.layer4(x_8)
+            outputs.append(x_8)
         elif self.resnet_stages_num > 5:
             raise NotImplementedError
 
-        if self.if_upsample_2x:
-            x = self.upsamplex2(x_8)    #if stages_num < 5: 1/4, in=512, out=512
+        # if self.if_upsample_2x:
+        #     x = self.upsamplex2(x_8)    #if stages_num < 5: 1/4, in=512, out=512
                                         
-        else:
-            x = x_8
+        # else:
+        #     x = x_8
         # output layers
-        x = self.conv_pred(x)   #stages_num < 5: 1/4, in=512, out=512
-        return x
+        # x = self.conv_pred(x)   #stages_num < 5: 1/4, in=512, out=512
+        return outputs
 
 
 class BASE_Transformer(ResNet):
@@ -325,7 +331,16 @@ class BASE_Transformer(ResNet):
         self.transformer_decoder = TransformerDecoder(dim=dim, depth=self.dec_depth,
                             heads=8, dim_head=self.decoder_dim_head, mlp_dim=mlp_dim, dropout=0,
                                                       softmax=decoder_softmax)
+        
+        # self.TDec   = TDec( input_transform='multiple_select', in_index=[0, 1, 2, 3], align_corners=True, 
+        #                     in_channels = [64, 128, 256, 512], embedding_dim= 32, output_nc=output_nc, 
+        #                     decoder_softmax = decoder_softmax, feature_strides=[4, 8, 16, 32])
+        
+        # self.TDec_x2   = DecoderTransformer_v4(input_transform='multiple_select', in_index=[0, 1, 2, 3], align_corners=False, 
+        #             in_channels = [64,128,256,512], embedding_dim= 256, output_nc=output_nc, 
+        #             decoder_softmax = decoder_softmax, feature_strides=[4, 8, 16, 32])
 
+        self.decoder = ChangeDetectionDecoder()
     def _forward_semantic_tokens(self, x):
         b, c, h, w = x.shape
         spatial_attention = self.conv_a(x)
@@ -375,45 +390,65 @@ class BASE_Transformer(ResNet):
 
     def forward(self, x1, x2):
         # forward backbone resnet
-        x1 = self.forward_single(x1)
-        x2 = self.forward_single(x2)
+        fx1 = self.forward_single(x1)
+        fx2 = self.forward_single(x2)
+        DI = []
+        for i in range(0,4):
+            DI.append(torch.abs(fx1[i] - fx2[i]))
 
-        #  forward tokenzier
-        if self.tokenizer:
-            token1 = self._forward_semantic_tokens(x1)
-            token2 = self._forward_semantic_tokens(x2)
-        else:
-            token1 = self._forward_reshape_tokens(x1)
-            token2 = self._forward_reshape_tokens(x2)
-        # forward transformer encoder
-        if self.token_trans:
-            self.tokens_ = torch.cat([token1, token2], dim=1)
-            self.tokens = self._forward_transformer(self.tokens_)
-            token1, token2 = self.tokens.chunk(2, dim=1)
-        # forward transformer decoder
-        if self.with_decoder:
-            x1 = self._forward_transformer_decoder(x1, token1)
-            x2 = self._forward_transformer_decoder(x2, token2)
-        else:
-            x1 = self._forward_simple_decoder(x1, token1)
-            x2 = self._forward_simple_decoder(x2, token2)
+        change_map = self.decoder(DI)
+        if self.output_sigmoid:
+            change_map = self.sigmoid(change_map)
+        outputs = []
+        outputs.append(change_map)
+        return outputs
+    
+        # cp = self.TDec_x2(fx1, fx2)
+        # return cp
+        # DI = []
+        # for i in range(0,4):
+        #     DI.append(torch.abs(fx1[i] - fx2[i]))
+
+        # cp = self.TDec(DI)
+
+        # return cp
+
+        # #  forward tokenzier
+        # if self.tokenizer:
+        #     token1 = self._forward_semantic_tokens(x1)
+        #     token2 = self._forward_semantic_tokens(x2)
+        # else:
+        #     token1 = self._forward_reshape_tokens(x1)
+        #     token2 = self._forward_reshape_tokens(x2)
+        # # forward transformer encoder
+        # if self.token_trans:
+        #     self.tokens_ = torch.cat([token1, token2], dim=1)
+        #     self.tokens = self._forward_transformer(self.tokens_)
+        #     token1, token2 = self.tokens.chunk(2, dim=1)
+        # # forward transformer decoder
+        # if self.with_decoder:
+        #     x1 = self._forward_transformer_decoder(x1, token1)
+        #     x2 = self._forward_transformer_decoder(x2, token2)
+        # else:
+        #     x1 = self._forward_simple_decoder(x1, token1)
+        #     x2 = self._forward_simple_decoder(x2, token2)
         # feature differencing
         
         # this zone will be rewritten in the future
         
-        x = torch.abs(x1 - x2)
+        # x = torch.abs(x1 - x2)
         
-        # ######
+        # # ######
         
-        if not self.if_upsample_2x:
-            x = self.upsamplex2(x)
-        x = self.upsamplex4(x)
-        # forward small cnn
-        x = self.classifier(x)
-        if self.output_sigmoid:
-            x = self.sigmoid(x)
-        outputs = []
-        outputs.append(x)
-        return outputs
+        # if not self.if_upsample_2x:
+        #     x = self.upsamplex2(x)
+        # x = self.upsamplex4(x)
+        # # forward small cnn
+        # x = self.classifier(x)
+        # if self.output_sigmoid:
+        #     x = self.sigmoid(x)
+        # outputs = []
+        # outputs.append(x)
+        # return outputs
 
 
