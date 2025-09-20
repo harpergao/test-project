@@ -4,8 +4,8 @@
 gpus=0
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_transformer_pos_s4_dd8_2
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_transformer_pos_s4_dd8_2        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b4
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b4        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
@@ -15,7 +15,7 @@ lr=0.0001
 max_epochs=201
 embed_dim=256
 
-net_G=base_transformer_pos_s4_dd8        #ChangeFormerV6 is the finalized verion
+net_G=base_efficientnet_b4        #ChangeFormerV6 is the finalized verion
                             # The G likely stands for "Generator.
 
 lr_policy=linear

@@ -15,6 +15,12 @@ from models.SiamUnet_conc import SiamUnet_conc
 from models.Unet import Unet
 from models.DTCDSCN import CDNet34
 
+import os
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com/'          # 国内镜像1
+# os.environ['HF_ENDPOINT'] = 'https://modelscope.cn/'          # 国内镜像2
+import timm
+
+from fpn import FPN
 ###############################################################################
 # Helper Functions
 ###############################################################################
@@ -140,6 +146,9 @@ def define_G(args, init_type='normal', init_gain=0.02, gpu_ids=[]):
         net = BASE_Transformer(input_nc=3, output_nc=2, token_len=4, resnet_stages_num=4,
                              with_pos='learned', enc_depth=1, dec_depth=8, decoder_dim_head=8)
 
+    elif args.net_G == 'base_efficientnet_b4':
+        net = EfficientNet(input_nc=3, output_nc=2, backbone='efficientnet_b4')
+        
     elif args.net_G == 'ChangeFormerV1':
         net = ChangeFormerV1() #ChangeFormer with Transformer Encoder and Convolutional Decoder
     
@@ -416,4 +425,94 @@ class BASE_Transformer(ResNet):
         outputs.append(x)
         return outputs
 
+def make_prediction(in_channels, out_channels):
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+        nn.ReLU(),
+        nn.BatchNorm2d(out_channels),
+        nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+    )
 
+class ResidualBlock(torch.nn.Module):
+    def __init__(self, channels):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        residual = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        # out = self.bn2(self.conv2(out)) * 0.1
+        out = self.bn2(self.conv2(out))
+        out += residual
+        return out
+    
+class EfficientNet(nn.Module):
+    def __init__(self, input_nc, output_nc=2,
+                 backbone='efficientnet_b4',
+                 output_sigmoid=False, if_upsample_2x=True):
+        super(EfficientNet, self).__init__()
+        if backbone == 'efficientnet_b4':
+            self.efficientnet = timm.create_model(
+                                'efficientnet_b4', pretrained=True, features_only=True,
+                            )
+        else:
+            raise NotImplementedError
+        
+        feature_channels = self.efficientnet.feature_info.channels()
+        fpn_in_channels = feature_channels[1:]
+        fpn_out_channels = 256
+        
+        self.fpn = FPN(
+            in_channels=fpn_in_channels, # 刚刚动态获取的通道数列表
+            out_channels=fpn_out_channels,       # FPN 输出的所有特征图的统一通道数，256 是一个常用值
+            num_outs=len(fpn_in_channels) # FPN 输出的特征图数量，通常和输入数量一致
+            )
+        
+        self.convd2x    = nn.ConvTranspose2d(fpn_out_channels * 4, fpn_out_channels, kernel_size=4, stride=2, padding=1)
+        self.dense_2x   = nn.Sequential( ResidualBlock(fpn_out_channels))
+        self.convd1x    = nn.ConvTranspose2d(fpn_out_channels, fpn_out_channels//2, kernel_size=4, stride=2, padding=1)
+        self.dense_1x   = nn.Sequential( ResidualBlock(fpn_out_channels//2))
+        self.change_probability = nn.Conv2d(fpn_out_channels//2, output_nc, kernel_size=3, stride=1, padding=1)
+
+        # self.relu = nn.ReLU()
+        # self.upsamplex2 = nn.Upsample(scale_factor=2)
+        # self.upsamplex4 = nn.Upsample(scale_factor=4, mode='bilinear')
+
+        # self.classifier = TwoLayerConv2d(in_channels=32, out_channels=output_nc)
+
+        # self.if_upsample_2x = if_upsample_2x
+
+        # self.conv_pred = nn.Conv2d(layers, 32, kernel_size=3, padding=1)
+
+        # self.output_sigmoid = output_sigmoid
+        # self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x1, x2):
+        x1 = self.efficientnet(x1)[1:]
+        x2 = self.efficientnet(x2)[1:]
+        diff = []
+        for f1, f2 in zip(x1, x2):
+            diff.append(torch.abs(f1 - f2))
+        x = self.fpn(diff)
+        p2, p3, p4, p5 = x
+        outputs = []
+        p3_upsampled = F.interpolate(p3, size=p2.shape[-2:], mode='bilinear')
+        p4_upsampled = F.interpolate(p4, size=p2.shape[-2:], mode='bilinear')
+        p5_upsampled = F.interpolate(p5, size=p2.shape[-2:], mode='bilinear')        
+        
+        fused_features = torch.cat([p2, p3_upsampled, p4_upsampled, p5_upsampled], dim=1)
+        x = self.convd2x(fused_features)
+        #Residual block
+        x = self.dense_2x(x)
+        #Upsampling x2 (x1 scale)
+        x = self.convd1x(x)
+        #Residual block
+        x = self.dense_1x(x)
+        #Final prediction
+        cp = self.change_probability(x)
+        outputs.append(cp)
+        return outputs

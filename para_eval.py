@@ -18,7 +18,7 @@ ChangeFormerV6 = SiamUnet_diff = ResNet
 if __name__ == "__main__":
     # --- 步骤 1: 设置要测试的模型 ---
     args = SimpleNamespace()
-    args.net_G = 'ChangeFormerV1' # 您可以换成任何想测试的模型
+    args.net_G = 'base_efficientnet_b4' # 您可以换成任何想测试的模型
     args.embed_dim = 256 # 确保为需要它的模型提供参数
 
     # --- 步骤 1.5: 定义您要使用的设备 ---
