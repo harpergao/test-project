@@ -450,6 +450,22 @@ class ResidualBlock(torch.nn.Module):
         out += residual
         return out
     
+def make_prediction(in_channels, out_channels):
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+        nn.ReLU(),
+        nn.BatchNorm2d(out_channels),
+        nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+    )
+    
+def conv_diff(in_channels, out_channels):
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+        nn.ReLU(),
+        nn.BatchNorm2d(out_channels),
+        nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+        nn.ReLU()
+    )
 class EfficientNet(nn.Module):
     def __init__(self, input_nc, output_nc=2,
                  backbone='efficientnet_b4',
@@ -472,12 +488,33 @@ class EfficientNet(nn.Module):
             num_outs=len(fpn_in_channels) # FPN 输出的特征图数量，通常和输入数量一致
             )
         
-        self.convd2x    = nn.ConvTranspose2d(fpn_out_channels * 4, fpn_out_channels, kernel_size=4, stride=2, padding=1)
+        self.convd2x    = nn.ConvTranspose2d(fpn_out_channels*4, fpn_out_channels, kernel_size=4, stride=2, padding=1)
         self.dense_2x   = nn.Sequential( ResidualBlock(fpn_out_channels))
         self.convd1x    = nn.ConvTranspose2d(fpn_out_channels, fpn_out_channels//2, kernel_size=4, stride=2, padding=1)
         self.dense_1x   = nn.Sequential( ResidualBlock(fpn_out_channels//2))
         self.change_probability = nn.Conv2d(fpn_out_channels//2, output_nc, kernel_size=3, stride=1, padding=1)
-
+        self.decoder_layer1 = nn.Sequential(
+            ResidualBlock(fpn_out_channels * 2),
+            ResidualBlock(fpn_out_channels * 2),
+            ResidualBlock(fpn_out_channels * 2),
+            ResidualBlock(fpn_out_channels * 2),
+        )
+        self.decoder_layer2 = nn.Sequential(
+            ResidualBlock(fpn_out_channels),
+            ResidualBlock(fpn_out_channels),
+            ResidualBlock(fpn_out_channels),
+        )
+        self.diff_c3   = conv_diff(in_channels=2*fpn_out_channels, out_channels=fpn_out_channels)
+        self.diff_c2   = conv_diff(in_channels=2*fpn_out_channels, out_channels=fpn_out_channels)
+        self.diff_c1   = conv_diff(in_channels=2*fpn_out_channels, out_channels=fpn_out_channels)
+        self.diff_c0   = conv_diff(in_channels=2*fpn_out_channels, out_channels=fpn_out_channels)
+        
+        self.pre3 = make_prediction(fpn_out_channels, output_nc)
+        self.pre2 = make_prediction(fpn_out_channels, output_nc)
+        self.pre1 = make_prediction(fpn_out_channels, output_nc)
+        self.pre0 = make_prediction(fpn_out_channels, output_nc)
+        
+        self.bottleneck_conv = nn.Conv2d(in_channels=fpn_out_channels * 8, out_channels=fpn_out_channels, kernel_size=1, bias=False)
         # self.relu = nn.ReLU()
         # self.upsamplex2 = nn.Upsample(scale_factor=2)
         # self.upsamplex4 = nn.Upsample(scale_factor=4, mode='bilinear')
@@ -491,21 +528,79 @@ class EfficientNet(nn.Module):
         # self.output_sigmoid = output_sigmoid
         # self.sigmoid = nn.Sigmoid()
 
+    def change_feature(self, x, y):
+        i = 2
+        for index in range(0, len(x), i):
+            x[index], y[index] = y[index], x[index]
+        return x, y
+    def euclidean_distance(self, img1, img2):
+        diff_squared = (img1 - img2) ** 2
+        distances = torch.sqrt(torch.sum(diff_squared, dim=1)).unsqueeze(1)
+        max_distance = torch.max(distances)
+        normalized_distances = torch.sigmoid(distances / max_distance)
+        return normalized_distances
+    
     def forward(self, x1, x2):
         x1 = self.efficientnet(x1)[1:]
         x2 = self.efficientnet(x2)[1:]
-        diff = []
-        for f1, f2 in zip(x1, x2):
-            diff.append(torch.abs(f1 - f2))
-        x = self.fpn(diff)
-        p2, p3, p4, p5 = x
-        outputs = []
-        p3_upsampled = F.interpolate(p3, size=p2.shape[-2:], mode='bilinear')
-        p4_upsampled = F.interpolate(p4, size=p2.shape[-2:], mode='bilinear')
-        p5_upsampled = F.interpolate(p5, size=p2.shape[-2:], mode='bilinear')        
+        # diff = []
+        # for f1, f2 in zip(x1, x2):
+        #     diff.append(torch.abs(f1 - f2))
+        # x = self.fpn(diff)
+        # p2, p3, p4, p5 = x
+        x1, x2 = self.change_feature(x1, x2)
+        x1 = self.fpn(x1)
+        x2 = self.fpn(x2)
+        x1, x2 = self.change_feature(list(x1), list(x2))
         
-        fused_features = torch.cat([p2, p3_upsampled, p4_upsampled, p5_upsampled], dim=1)
-        x = self.convd2x(fused_features)
+        outputs = []
+        
+        # --- Decoder Level 3 (Lowest Resolution) ---
+        x12_3 = torch.cat([x1[3], x2[3]], dim=1)
+        x12_3 = self.euclidean_distance(x1[3], x2[3]) * self.decoder_layer1[3](x12_3)
+        x12_3 = self.diff_c3(x12_3)
+        x12_30 = self.pre3(x12_3) # Prediction head for this level
+        outputs.append(x12_30)
+        # Prepare for final fusion by upsampling to the highest resolution
+        x12_31 = F.interpolate(x12_3, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
+
+        # --- Decoder Level 2 ---
+        x12_2 = torch.cat([x1[2], x2[2]], dim=1)
+        x12_2 = self.diff_c2(x12_2) + F.interpolate(x12_3, scale_factor=2, mode='bilinear', align_corners=False)
+        x12_2 = self.euclidean_distance(x1[2], x2[2]) * self.decoder_layer2[2](x12_2)
+
+        x12_20 = self.pre2(x12_2) # Prediction head for this level
+        outputs.append(x12_20)
+        # Prepare for final fusion by upsampling to the highest resolution
+        x12_21 = F.interpolate(x12_2, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
+
+        # --- Decoder Level 1 ---
+        x12_1 = torch.cat([x1[1], x2[1]], dim=1)
+        x12_1 = self.diff_c1(x12_1) + F.interpolate(x12_2, scale_factor=2, mode='bilinear', align_corners=False)
+        x12_1 = self.euclidean_distance(x1[1], x2[1]) * self.decoder_layer2[1](x12_1)
+ 
+        x12_10 = self.pre1(x12_1) # Prediction head for this level
+        outputs.append(x12_10)
+        # Prepare for final fusion by upsampling to the highest resolution
+        x12_11 = F.interpolate(x12_1, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
+        
+        # --- Decoder Level 0 (Highest Resolution) ---
+        x12_0 = torch.cat([x1[0], x2[0]], dim=1)
+        x12_0 = self.diff_c0(x12_0) + F.interpolate(x12_1, scale_factor=2, mode='bilinear', align_corners=False)
+        x12_0 = self.euclidean_distance(x1[0], x2[0]) * self.decoder_layer2[0](x12_0)
+
+        x12_00 = self.pre0(x12_0) # Prediction head for this level
+        outputs.append(x12_00)
+        
+        # x12_1 = torch.cat([x1[1], x2[1]], dim=1)
+        # x12_1 = self.decoder_layer1[1](x12_1) + F.interpolate(x12_2, scale_factor=2, mode='bilinear', align_corners=False)
+        # x12_1 = self.euclidean_distance(x1[1], x2[1])*self.decoder_layer2[1](x12_1)
+        # x12_10 = self.pre5(x12_1)
+        # outputs.append(x12_10)
+        
+        x_fuse = torch.cat([x12_0, x12_11, x12_21, x12_31], dim=1)
+        # x_fuse = self.bottleneck_conv(x_fuse)
+        x = self.convd2x(x_fuse)
         #Residual block
         x = self.dense_2x(x)
         #Upsampling x2 (x1 scale)
@@ -515,4 +610,22 @@ class EfficientNet(nn.Module):
         #Final prediction
         cp = self.change_probability(x)
         outputs.append(cp)
+        
+        
+        # outputs = []
+        # p3_upsampled = F.interpolate(p3, size=p2.shape[-2:], mode='bilinear')
+        # p4_upsampled = F.interpolate(p4, size=p2.shape[-2:], mode='bilinear')
+        # p5_upsampled = F.interpolate(p5, size=p2.shape[-2:], mode='bilinear')        
+        
+        # fused_features = torch.cat([p2, p3_upsampled, p4_upsampled, p5_upsampled], dim=1)
+        # x = self.convd2x(fused_features)
+        # #Residual block
+        # x = self.dense_2x(x)
+        # #Upsampling x2 (x1 scale)
+        # x = self.convd1x(x)
+        # #Residual block
+        # x = self.dense_1x(x)
+        # #Final prediction
+        # cp = self.change_probability(x)
+        # outputs.append(cp)
         return outputs
