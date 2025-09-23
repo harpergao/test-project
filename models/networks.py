@@ -726,7 +726,7 @@ class Base_EfficientNet(nn.Module):
         # x12_3 = self.euclidean_distance(x1[3], x2[3]) * self.decoder_layer1[3](x12_3)
         x12_3 = self.diff_c3(x12_3)
         x12_30 = self.pre3(x12_3) # Prediction head for this level
-        outputs.append(x12_30)
+        # outputs.append(x12_30)
         # Prepare for final fusion by upsampling to the highest resolution
         x12_31 = F.interpolate(x12_3, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
 
@@ -736,7 +736,7 @@ class Base_EfficientNet(nn.Module):
         # x12_2 = self.euclidean_distance(x1[2], x2[2]) * self.decoder_layer2[2](x12_2)
 
         x12_20 = self.pre2(x12_2) # Prediction head for this level
-        outputs.append(x12_20)
+        # outputs.append(x12_20)
         # Prepare for final fusion by upsampling to the highest resolution
         x12_21 = F.interpolate(x12_2, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
 
@@ -746,7 +746,7 @@ class Base_EfficientNet(nn.Module):
         # x12_1 = self.euclidean_distance(x1[1], x2[1]) * self.decoder_layer2[1](x12_1)
  
         x12_10 = self.pre1(x12_1) # Prediction head for this level
-        outputs.append(x12_10)
+        # outputs.append(x12_10)
         # Prepare for final fusion by upsampling to the highest resolution
         x12_11 = F.interpolate(x12_1, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
         
@@ -756,7 +756,7 @@ class Base_EfficientNet(nn.Module):
         # x12_0 = self.euclidean_distance(x1[0], x2[0]) * self.decoder_layer2[0](x12_0)
 
         x12_00 = self.pre0(x12_0) # Prediction head for this level
-        outputs.append(x12_00)
+        # outputs.append(x12_00)
         
         # x12_1 = torch.cat([x1[1], x2[1]], dim=1)
         # x12_1 = self.decoder_layer1[1](x12_1) + F.interpolate(x12_2, scale_factor=2, mode='bilinear', align_corners=False)

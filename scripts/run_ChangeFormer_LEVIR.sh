@@ -4,8 +4,8 @@
 gpus=0
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b4_Effi_base0
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b4_Effi_base0        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b4_Effi_base0_multi_scale_train_False
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b4_Effi_base0_multi_scale_train_False        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
@@ -21,7 +21,7 @@ net_G=base_efficientnet_b4_0        #ChangeFormerV6 is the finalized verion
 lr_policy=linear
 optimizer=adamw                 #Choices: sgd (set lr to 0.01), adam, adamw
 loss=ce                         #Choices: ce, fl (Focal Loss), miou
-multi_scale_train=True
+multi_scale_train=False
 multi_scale_infer=False
 shuffle_AB=False
 
