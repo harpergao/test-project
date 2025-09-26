@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# from FreqFu?/sion import FreqFusion
 class FPN(nn.Module):
     """
     一个完全独立的 FPN 实现，只依赖 PyTorch。
@@ -58,6 +59,10 @@ class FPN(nn.Module):
         # 初始化权重 (这是一个好的实践)
         self._initialize_weights()
 
+        # self.ffList = nn.ModuleList()
+        # for _ in range(self.num_outs - 1):
+        #     self.ffList.append(FreqFusion(hr_channels=out_channels, lr_channels=out_channels))
+
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -76,11 +81,16 @@ class FPN(nn.Module):
             for i, lateral_conv in enumerate(self.lateral_convs)
         ]
 
-        # --- 步骤 2: 构建自顶向下的通路 ---
+        ## --- 步骤 2: 构建自顶向下的通路 ---
         for i in range(len(laterals) - 1, 0, -1):
             prev_shape = laterals[i - 1].shape[2:]
             laterals[i - 1] = laterals[i - 1] + F.interpolate(
                 laterals[i], size=prev_shape, **self.upsample_cfg)
+        # for i in range(len(laterals) - 1, 0, -1):
+        #     # # 获取当前层和上一层的空间尺寸
+        #     fusion_module_idx = i - 1
+        #     _, x, y = self.ffList[fusion_module_idx](hr_feat=laterals[i - 1], lr_feat=laterals[i])
+        #     laterals[i - 1] = x + y
 
         # --- 步骤 3: 在融合后的特征上应用 FPN 卷积 ---
         outs = [

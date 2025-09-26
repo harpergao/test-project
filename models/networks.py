@@ -8,7 +8,7 @@ import functools
 from einops import rearrange
 
 import models
-from models.help_funcs import Transformer, TransformerDecoder, TwoLayerConv2d
+from models.help_funcs import Transformer, TransformerDecoder, TwoLayerConv2d, SpatiotemporalAttentionFull
 from models.ChangeFormer import ChangeFormerV1, ChangeFormerV2, ChangeFormerV3, ChangeFormerV4, ChangeFormerV5, ChangeFormerV6
 from models.SiamUnet_diff import SiamUnet_diff
 from models.SiamUnet_conc import SiamUnet_conc
@@ -19,7 +19,7 @@ import os
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com/'          # 国内镜像1
 # os.environ['HF_ENDPOINT'] = 'https://modelscope.cn/'          # 国内镜像2
 import timm
-
+from FreqFusion import FreqFusion
 from fpn import FPN
 ###############################################################################
 # Helper Functions
@@ -149,7 +149,7 @@ def define_G(args, init_type='normal', init_gain=0.02, gpu_ids=[]):
     elif args.net_G == 'base_efficientnet_b4':
         net = EfficientNet(input_nc=3, output_nc=2, backbone='efficientnet_b4')
     elif args.net_G == 'base_efficientnet_b4_0':
-        net = Base_EfficientNet(input_nc=3, output_nc=2, backbone='efficientnet_b4')
+        net = Base_EfficientNet(input_nc=3, output_nc=2, backbone='efficientnet_b5')
         
     elif args.net_G == 'ChangeFormerV1':
         net = ChangeFormerV1() #ChangeFormer with Transformer Encoder and Convolutional Decoder
@@ -641,6 +641,10 @@ class Base_EfficientNet(nn.Module):
             self.efficientnet = timm.create_model(
                                 'efficientnet_b4', pretrained=True, features_only=True,
                             )
+        elif backbone == 'efficientnet_b5':
+            self.efficientnet = timm.create_model(
+                                'efficientnet_b5', pretrained=True, features_only=True,
+                            )
         else:
             raise NotImplementedError
         
@@ -680,20 +684,15 @@ class Base_EfficientNet(nn.Module):
         self.pre1 = make_prediction(fpn_out_channels, output_nc)
         self.pre0 = make_prediction(fpn_out_channels, output_nc)
         
-        self.bottleneck_conv = nn.Conv2d(in_channels=fpn_out_channels * 8, out_channels=fpn_out_channels, kernel_size=1, bias=False)
-        # self.relu = nn.ReLU()
-        # self.upsamplex2 = nn.Upsample(scale_factor=2)
-        # self.upsamplex4 = nn.Upsample(scale_factor=4, mode='bilinear')
+        # self.fref1 = FreqFusion(hr_channels=fpn_out_channels, lr_channels=fpn_out_channels)
+        # self.fref2 = FreqFusion(hr_channels=fpn_out_channels, lr_channels=fpn_out_channels)
+        # self.fref3 = FreqFusion(hr_channels=fpn_out_channels, lr_channels=fpn_out_channels)
 
-        # self.classifier = TwoLayerConv2d(in_channels=32, out_channels=output_nc)
-
-        # self.if_upsample_2x = if_upsample_2x
-
-        # self.conv_pred = nn.Conv2d(layers, 32, kernel_size=3, padding=1)
-
-        # self.output_sigmoid = output_sigmoid
-        # self.sigmoid = nn.Sigmoid()
-
+        self.stattention4 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        self.stattention3 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        self.stattention2 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        self.stattention1 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        
     def change_feature(self, x, y):
         i = 2
         for index in range(0, len(x), i):
@@ -709,60 +708,61 @@ class Base_EfficientNet(nn.Module):
     def forward(self, x1, x2):
         x1 = self.efficientnet(x1)[1:]
         x2 = self.efficientnet(x2)[1:]
-        # diff = []
-        # for f1, f2 in zip(x1, x2):
-        #     diff.append(torch.abs(f1 - f2))
-        # x = self.fpn(diff)
-        # p2, p3, p4, p5 = x
 
         x1 = self.fpn(x1)
         x2 = self.fpn(x2)
-
+        
+        x1_0, x1_1, x1_2, x1_3 = x1
+        x2_0, x2_1, x2_2, x2_3 = x2
         
         outputs = []
+        # x1_3,x2_3 = self.stattention4(x1_3,x2_3)
+        # x1_2,x2_2 = self.stattention3(x1_2,x2_2)
+        # x1_1,x2_1 = self.stattention2(x1_1,x2_1)
+        # x1_0,x2_0 = self.stattention1(x1[0],x2[0])
         
         # --- Decoder Level 3 (Lowest Resolution) ---
-        x12_3 = torch.cat([x1[3], x2[3]], dim=1)
-        # x12_3 = self.euclidean_distance(x1[3], x2[3]) * self.decoder_layer1[3](x12_3)
+        x12_3 = torch.cat([x1_3, x2_3], dim=1)
+
         x12_3 = self.diff_c3(x12_3)
         x12_30 = self.pre3(x12_3) # Prediction head for this level
-        # outputs.append(x12_30)
+        outputs.append(x12_30)
         # Prepare for final fusion by upsampling to the highest resolution
         x12_31 = F.interpolate(x12_3, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
 
         # --- Decoder Level 2 ---
-        x12_2 = torch.cat([x1[2], x2[2]], dim=1)
+        x12_2 = torch.cat([x1_2, x2_2], dim=1)
         x12_2 = self.diff_c2(x12_2) + F.interpolate(x12_3, scale_factor=2, mode='bilinear', align_corners=False)
-        # x12_2 = self.euclidean_distance(x1[2], x2[2]) * self.decoder_layer2[2](x12_2)
-
+        # x12_2 = self.diff_c2(x12_2)
+        # _, x12_2, x12_3up = self.fref3(x12_2, x12_3)
+        # x12_2 = x12_2 + x12_3up
         x12_20 = self.pre2(x12_2) # Prediction head for this level
-        # outputs.append(x12_20)
+        outputs.append(x12_20)
         # Prepare for final fusion by upsampling to the highest resolution
         x12_21 = F.interpolate(x12_2, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
 
         # --- Decoder Level 1 ---
-        x12_1 = torch.cat([x1[1], x2[1]], dim=1)
+        x12_1 = torch.cat([x1_1, x2_1], dim=1)
         x12_1 = self.diff_c1(x12_1) + F.interpolate(x12_2, scale_factor=2, mode='bilinear', align_corners=False)
+        # x12_1 = self.diff_c1(x12_1)
+        # _, x12_1, x12_2up = self.fref2(x12_1, x12_2)
+        # x12_1 = x12_1 + x12_2up
         # x12_1 = self.euclidean_distance(x1[1], x2[1]) * self.decoder_layer2[1](x12_1)
- 
         x12_10 = self.pre1(x12_1) # Prediction head for this level
-        # outputs.append(x12_10)
+        outputs.append(x12_10)
         # Prepare for final fusion by upsampling to the highest resolution
         x12_11 = F.interpolate(x12_1, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
         
         # --- Decoder Level 0 (Highest Resolution) ---
-        x12_0 = torch.cat([x1[0], x2[0]], dim=1)
+        x12_0 = torch.cat([x1_0, x2_0], dim=1)
         x12_0 = self.diff_c0(x12_0) + F.interpolate(x12_1, scale_factor=2, mode='bilinear', align_corners=False)
+        # x12_0 = self.diff_c0(x12_0)
+        # _, x12_0, x12_1up = self.fref1(x12_0, x12_1)
+        # x12_0 = x12_0 + x12_1up
         # x12_0 = self.euclidean_distance(x1[0], x2[0]) * self.decoder_layer2[0](x12_0)
-
         x12_00 = self.pre0(x12_0) # Prediction head for this level
-        # outputs.append(x12_00)
+        outputs.append(x12_00)
         
-        # x12_1 = torch.cat([x1[1], x2[1]], dim=1)
-        # x12_1 = self.decoder_layer1[1](x12_1) + F.interpolate(x12_2, scale_factor=2, mode='bilinear', align_corners=False)
-        # x12_1 = self.euclidean_distance(x1[1], x2[1])*self.decoder_layer2[1](x12_1)
-        # x12_10 = self.pre5(x12_1)
-        # outputs.append(x12_10)
         
         x_fuse = torch.cat([x12_0, x12_11, x12_21, x12_31], dim=1)
         # x_fuse = self.bottleneck_conv(x_fuse)
@@ -777,21 +777,4 @@ class Base_EfficientNet(nn.Module):
         cp = self.change_probability(x)
         outputs.append(cp)
         
-        
-        # outputs = []
-        # p3_upsampled = F.interpolate(p3, size=p2.shape[-2:], mode='bilinear')
-        # p4_upsampled = F.interpolate(p4, size=p2.shape[-2:], mode='bilinear')
-        # p5_upsampled = F.interpolate(p5, size=p2.shape[-2:], mode='bilinear')        
-        
-        # fused_features = torch.cat([p2, p3_upsampled, p4_upsampled, p5_upsampled], dim=1)
-        # x = self.convd2x(fused_features)
-        # #Residual block
-        # x = self.dense_2x(x)
-        # #Upsampling x2 (x1 scale)
-        # x = self.convd1x(x)
-        # #Residual block
-        # x = self.dense_1x(x)
-        # #Final prediction
-        # cp = self.change_probability(x)
-        # outputs.append(cp)
         return outputs

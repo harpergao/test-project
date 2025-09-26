@@ -17,7 +17,7 @@ def main():
     #                      而是返回一个包含多个中间层特征图的列表，这正是 FPN 需要的输入格式。
     print("正在创建 EfficientNet-B5 模型...")
     backbone = timm.create_model(
-        'efficientnet_b4',
+        'efficientnet_b5',
         pretrained=True,
         features_only=True,
     )
