@@ -149,7 +149,7 @@ def define_G(args, init_type='normal', init_gain=0.02, gpu_ids=[]):
     elif args.net_G == 'base_efficientnet_b4':
         net = EfficientNet(input_nc=3, output_nc=2, backbone='efficientnet_b4')
     elif args.net_G == 'base_efficientnet_b4_0':
-        net = Base_EfficientNet(input_nc=3, output_nc=2, backbone='efficientnet_b5')
+        net = Base_EfficientNet(input_nc=3, output_nc=2, backbone='efficientnet_b4')
         
     elif args.net_G == 'ChangeFormerV1':
         net = ChangeFormerV1() #ChangeFormer with Transformer Encoder and Convolutional Decoder
@@ -688,10 +688,10 @@ class Base_EfficientNet(nn.Module):
         # self.fref2 = FreqFusion(hr_channels=fpn_out_channels, lr_channels=fpn_out_channels)
         # self.fref3 = FreqFusion(hr_channels=fpn_out_channels, lr_channels=fpn_out_channels)
 
-        self.stattention4 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
-        self.stattention3 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
-        self.stattention2 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
-        self.stattention1 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        # self.stattention4 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        # self.stattention3 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        # self.stattention2 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
+        # self.stattention1 = SpatiotemporalAttentionFull(in_channels=fpn_out_channels)
         
     def change_feature(self, x, y):
         i = 2

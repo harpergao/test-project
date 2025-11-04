@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 
 #GPUs
-gpus=0
+# gpus=0
+export CUDA_VISIBLE_DEVICES=0,1
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b5_Effi_base0
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b5_Effi_base0        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b4_FPNCD_On2GPUS
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b4_FPNCD_On2GPUS        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
 img_size=256    # 256x256 pixels.
 batch_size=16   # The model will process 16 pairs of images at once during each training step.
-lr=0.0001         
+lr=0.0002        #!!!BEFORE 0.0001 !!! The learning rate for the optimizer, which controls how much to change the model in response to the estimated error each time the model weights are updated.             
 max_epochs=201
 embed_dim=256
 
-net_G=base_efficientnet_b4_0        #ChangeFormerV6 is the finalized verion
+net_G=base_efficientnet_b4       #ChangeFormerV6 is the finalized verion
                             # The G likely stands for "Generator.
 
 lr_policy=linear
@@ -34,24 +35,47 @@ split=train         #trainval
 split_val=test      #test
 project_name=CD_${net_G}_${data_name}_b${batch_size}_lr${lr}_${optimizer}_${split}_${split_val}_${max_epochs}_${lr_policy}_${loss}_multi_train_${multi_scale_train}_multi_infer_${multi_scale_infer}_shuffle_AB_${shuffle_AB}_embed_dim_${embed_dim}
 
-CUDA_VISIBLE_DEVICES=1 python main_cd.py \
- --img_size ${img_size} \
- --loss ${loss} \
- --checkpoint_root ${checkpoint_root} \
- --vis_root ${vis_root}\
- --lr_policy ${lr_policy} \
- --optimizer ${optimizer}\
- --split ${split} \
- --split_val ${split_val} \
- --net_G ${net_G}\
- --multi_scale_train ${multi_scale_train}\
- --multi_scale_infer ${multi_scale_infer}\
- --gpu_ids ${gpus} \
- --max_epochs ${max_epochs} \
- --project_name ${project_name} \
- --batch_size ${batch_size} \
- --shuffle_AB ${shuffle_AB} \
- --data_name ${data_name} \
- --lr ${lr}\
- --embed_dim ${embed_dim}
-# --pretrain ${pretrain}\
+echo "Starting DDP training on GPUs: $CUDA_VISIBLE_DEVICES"
+torchrun --nproc_per_node=2 main_cd.py \
+    --img_size ${img_size} \
+    --loss ${loss} \
+    --checkpoint_root ${checkpoint_root} \
+    --vis_root ${vis_root}\
+    --lr_policy ${lr_policy} \
+    --optimizer ${optimizer}\
+    --split ${split} \
+    --split_val ${split_val} \
+    --net_G ${net_G}\
+    --multi_scale_train ${multi_scale_train}\
+    --multi_scale_infer ${multi_scale_infer}\
+    --max_epochs ${max_epochs} \
+    --project_name ${project_name} \
+    --batch_size ${batch_size} \
+    --shuffle_AB ${shuffle_AB} \
+    --data_name ${data_name} \
+    --lr ${lr}\
+    --embed_dim ${embed_dim}
+    # 注意：--gpu_ids 参数已被移除，不再需要
+    # --pretrain ${pretrain}\
+
+# CUDA_VISIBLE_DEVICES=1 python main_cd.py \
+#  --img_size ${img_size} \
+#  --loss ${loss} \
+#  --checkpoint_root ${checkpoint_root} \
+#  --vis_root ${vis_root}\
+#  --lr_policy ${lr_policy} \
+#  --optimizer ${optimizer}\
+#  --split ${split} \
+#  --split_val ${split_val} \
+#  --net_G ${net_G}\
+#  --multi_scale_train ${multi_scale_train}\
+#  --multi_scale_infer ${multi_scale_infer}\
+#  --gpu_ids ${gpus} \
+#  --max_epochs ${max_epochs} \
+#  --project_name ${project_name} \
+#  --batch_size ${batch_size} \
+#  --shuffle_AB ${shuffle_AB} \
+#  --data_name ${data_name} \
+#  --lr ${lr}\
+#  --embed_dim ${embed_dim}
+# # --pretrain ${pretrain}\

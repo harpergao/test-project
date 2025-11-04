@@ -23,9 +23,14 @@ class CDEvaluator():
 
         self.n_class = args.n_class
         # define G
-        self.net_G = define_G(args=args, gpu_ids=args.gpu_ids)
-        self.device = torch.device("cuda:%s" % args.gpu_ids[0] if torch.cuda.is_available() and len(args.gpu_ids)>0
-                                   else "cpu")
+        # self.net_G = define_G(args=args, gpu_ids=args.gpu_ids)
+        # self.device = torch.device("cuda:%s" % args.gpu_ids[0] if torch.cuda.is_available() and len(args.gpu_ids)>0
+                                #    else "cpu")
+        
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.net_G = define_G(args=args, gpu_ids=[])      
+        self.net_G.to(self.device)
+        
         print(self.device)
 
         # define some other vars to record the training states
