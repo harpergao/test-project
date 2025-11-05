@@ -5,8 +5,8 @@
 export CUDA_VISIBLE_DEVICES=0,1
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b4_FPNCD_On2GPUS
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b4_FPNCD_On2GPUS        #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b4_FPNCD_CosineAnnealing
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b4_FPNCD_CosineAnnealing       #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 

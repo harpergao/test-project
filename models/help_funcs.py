@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
-
+import numpy as np
 
 class TwoLayerConv2d(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel_size=3):
@@ -296,7 +296,60 @@ class SpatiotemporalAttentionFull(nn.Module):
         y2 = y2.reshape(batch_size, self.inter_channels, *x1.size()[2:])
         return x1 + self.W(y1), x2 + self.W(y2)
 
+class LossWeightAnnealing:
+    def __init__(self, initial_weights, final_weights, total_epochs, warmup_epochs=50, decay_end_epoch=150):
+        """
+        初始化权重衰减器
+        :param initial_weights: 列表, 初始权重 (e.g., [0.2, 0.2, 0.4, 1.0])
+        :param final_weights: 列表, 最终权重 (e.g., [0.0, 0.0, 0.0, 1.0])
+        :param total_epochs: 总训练轮数 (e.g., 200)
+        :param warmup_epochs: 预热轮数，期间权重保持不变 (e.g., 50)
+        :param decay_end_epoch: 衰减结束轮数 (e.g., 150)
+        """
+        self.initial_weights = np.array(initial_weights)
+        self.final_weights = np.array(final_weights)
+        self.total_epochs = total_epochs
+        self.warmup_epochs = warmup_epochs
+        self.decay_start_epoch = warmup_epochs
+        self.decay_end_epoch = decay_end_epoch
+        self.decay_epochs = self.decay_end_epoch - self.decay_start_epoch
+        
+        # 确保最后一个权重（主损失）不被衰减
+        # if self.initial_weights[-1] == self.final_weights[-1]:
+        #     print(f"主损失权重将保持在 {self.initial_weights[-1]}")
+        
+        # print(f"权重衰减策略: [0-{self.warmup_epochs}] 保持初始权重。")
+        # print(f"[{self.warmup_epochs}-{self.decay_end_epoch}] 余弦衰减至最终权重。")
+        # print(f"[{self.decay_end_epoch}-{self.total_epochs}] 保持最终权重。")
 
+
+    def get_weights(self, current_epoch):
+        """
+        根据当前 epoch 获取动态权重
+        :param current_epoch: 当前的 epoch (从 0 开始)
+        """
+        if current_epoch < self.decay_start_epoch:
+            # 1. 预热阶段
+            return self.initial_weights.tolist()
+        
+        elif current_epoch >= self.decay_end_epoch:
+            # 3. 精调阶段
+            return self.final_weights.tolist()
+            
+        else:
+            # 2. 衰减阶段 (使用余弦衰减)
+            # 计算衰减进度 (0.0 -> 1.0)
+            progress = (current_epoch - self.decay_start_epoch) / self.decay_epochs
+            
+            # 余弦插值: 0.5 * (1 + cos(pi * progress)) 会从 1.0 平滑降到 0.0
+            # 我们需要的是从 initial_weight 降到 final_weight
+            cosine_scale = 0.5 * (1 + np.cos(np.pi * progress)) # (1.0 -> 0.0)
+            
+            # 权重 = 最终 + (初始 - 最终) * 缩放
+            # (当 scale=1, 权重=初始; 当 scale=0, 权重=最终)
+            current_weights = self.final_weights + (self.initial_weights - self.final_weights) * cosine_scale
+            
+            return current_weights.tolist()
 
 
 
