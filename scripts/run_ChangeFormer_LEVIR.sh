@@ -5,8 +5,8 @@
 export CUDA_VISIBLE_DEVICES=0,1
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/changeformerV6_freq
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/changeformerV6_freq      #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint3/changeformerV6_freq
+vis_root=/mnt/data1/gyf/code/newtest/ChangeFormer/vis3/changeformerV6_freq      #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
