@@ -435,6 +435,35 @@ def make_prediction(in_channels, out_channels):
         nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
     )
 
+# # 上采样模块 代替nn.ConvTranspose2d
+# class UpsampleBlock(nn.Module):
+#     def __init__(self, in_channels, out_channels):
+#         super().__init__()
+#         self.upsample_conv = nn.Sequential(
+#             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+#             nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
+#             nn.BatchNorm2d(out_channels), 
+#             nn.ReLU(inplace=True)
+#         )
+#     def forward(self, x):
+#         return self.upsample_conv(x)  
+
+class Euclidean_distance(nn.Module):
+    def __init__(self, C):
+        super().__init__()
+        self.change_attention = nn.Sequential(
+            nn.Conv2d(C * 2, C, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(C),
+            nn.Conv2d(C, 1, kernel_size=1),
+            nn.Sigmoid()  
+        )
+        
+    def forward(self, x1, x2):
+        x_cat = torch.cat([x1, x2], dim=1)
+        change_mask = self.change_attention(x_cat)
+        return change_mask
+
 class ResidualBlock(torch.nn.Module):
     def __init__(self, channels):
         super(ResidualBlock, self).__init__()
@@ -468,6 +497,7 @@ def conv_diff(in_channels, out_channels):
         nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
         nn.ReLU()
     )
+    
 class EfficientNet(nn.Module):
     def __init__(self, input_nc, output_nc=2,
                  backbone='efficientnet_b4',
@@ -480,9 +510,9 @@ class EfficientNet(nn.Module):
         else:
             raise NotImplementedError
         
-        feature_channels = self.efficientnet.feature_info.channels()
-        fpn_in_channels = feature_channels[1:]
-        fpn_out_channels = 256
+        feature_channels = self.efficientnet.feature_info.channels()    #获取各层特征图的通道数列表
+        fpn_in_channels = feature_channels[1:]      # 去掉第一个特征图（通常分辨率最高，语义信息最少），减少计算量
+        fpn_out_channels = 256    # FPN 输出的统一通道数
         
         self.fpn = FPN(
             in_channels=fpn_in_channels, # 刚刚动态获取的通道数列表
@@ -490,9 +520,11 @@ class EfficientNet(nn.Module):
             num_outs=len(fpn_in_channels) # FPN 输出的特征图数量，通常和输入数量一致
             )
         
-        self.convd2x    = nn.ConvTranspose2d(fpn_out_channels*4, fpn_out_channels, kernel_size=4, stride=2, padding=1)
+        self.   convd2x    = nn.ConvTranspose2d(fpn_out_channels*4, fpn_out_channels, kernel_size=4, stride=2, padding=1)
+        # self.convd2x    = UpsampleBlock(fpn_out_channels*4, fpn_out_channels)
         self.dense_2x   = nn.Sequential( ResidualBlock(fpn_out_channels))
         self.convd1x    = nn.ConvTranspose2d(fpn_out_channels, fpn_out_channels//2, kernel_size=4, stride=2, padding=1)
+        # self.convd1x    = UpsampleBlock(fpn_out_channels, fpn_out_channels//2)
         self.dense_1x   = nn.Sequential( ResidualBlock(fpn_out_channels//2))
         self.change_probability = nn.Conv2d(fpn_out_channels//2, output_nc, kernel_size=3, stride=1, padding=1)
         self.decoder_layer1 = nn.Sequential(
@@ -516,40 +548,38 @@ class EfficientNet(nn.Module):
         self.pre1 = make_prediction(fpn_out_channels, output_nc)
         self.pre0 = make_prediction(fpn_out_channels, output_nc)
         
-        self.bottleneck_conv = nn.Conv2d(in_channels=fpn_out_channels * 8, out_channels=fpn_out_channels, kernel_size=1, bias=False)
-        # self.relu = nn.ReLU()
-        # self.upsamplex2 = nn.Upsample(scale_factor=2)
-        # self.upsamplex4 = nn.Upsample(scale_factor=4, mode='bilinear')
+        # 模仿欧氏距离，注意力代替
+        self.euclidean_distance = Euclidean_distance(fpn_out_channels)
+        # self.change_scale = nn.Parameter(torch.tensor(1.0))
 
-        # self.classifier = TwoLayerConv2d(in_channels=32, out_channels=output_nc)
-
-        # self.if_upsample_2x = if_upsample_2x
-
-        # self.conv_pred = nn.Conv2d(layers, 32, kernel_size=3, padding=1)
-
-        # self.output_sigmoid = output_sigmoid
-        # self.sigmoid = nn.Sigmoid()
-
+    # 交换特征的方法
     def change_feature(self, x, y):
         i = 2
         for index in range(0, len(x), i):
             x[index], y[index] = y[index], x[index]
         return x, y
-    def euclidean_distance(self, img1, img2):
-        diff_squared = (img1 - img2) ** 2
-        distances = torch.sqrt(torch.sum(diff_squared, dim=1)).unsqueeze(1)
-        max_distance = torch.max(distances)
-        normalized_distances = torch.sigmoid(distances / max_distance)
-        return normalized_distances
-    
+    # # 计算欧氏距离并归一化
+    # def euclidean_distance(self, img1, img2):
+    #     diff_squared = (img1 - img2) ** 2
+    #     distances = torch.sqrt(torch.sum(diff_squared, dim=1, keepdim=True))
+    #     # max_distance = torch.max(distances)
+    #     # normalized_distances = torch.sigmoid(distances / max_distance)
+    #     change_mask = torch.sigmoid(distances * self.change_scale)
+    #     return change_mask
+
     def forward(self, x1, x2):
+        # Extract multi-scale features from EfficientNet
         x1 = self.efficientnet(x1)[1:]
         x2 = self.efficientnet(x2)[1:]
+        
+        # 直接相减，损失很大
         # diff = []
         # for f1, f2 in zip(x1, x2):
         #     diff.append(torch.abs(f1 - f2))
         # x = self.fpn(diff)
         # p2, p3, p4, p5 = x
+        
+        # 交换特征的的方法，有作用
         x1, x2 = self.change_feature(x1, x2)
         x1 = self.fpn(x1)
         x2 = self.fpn(x2)
@@ -557,79 +587,48 @@ class EfficientNet(nn.Module):
         
         outputs = []
         
-        # --- Decoder Level 3 (Lowest Resolution) ---
+        # x_3对应最低分辨率，经过特征拼接，残差块decoder_layer1(卷积，bn层),特征增强euclidean_distance，再次卷积增强diff_c3，
+        # 结果上采样到最高分辨率后保存，并输出一个预测头pre3用于深度监督
         x12_3 = torch.cat([x1[3], x2[3]], dim=1)
         x12_3 = self.euclidean_distance(x1[3], x2[3]) * self.decoder_layer1[3](x12_3)
         x12_3 = self.diff_c3(x12_3)
-        x12_30 = self.pre3(x12_3) # Prediction head for this level
+        x12_30 = self.pre3(x12_3) 
         outputs.append(x12_30)
-        # Prepare for final fusion by upsampling to the highest resolution
+        
         x12_31 = F.interpolate(x12_3, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
 
-        # --- Decoder Level 2 ---
+        # x_2对应稍低分辨率，过程与上述相同，但在拼接后加入了上一级的上采样特征
         x12_2 = torch.cat([x1[2], x2[2]], dim=1)
         x12_2 = self.diff_c2(x12_2) + F.interpolate(x12_3, scale_factor=2, mode='bilinear', align_corners=False)
         x12_2 = self.euclidean_distance(x1[2], x2[2]) * self.decoder_layer2[2](x12_2)
-
-        x12_20 = self.pre2(x12_2) # Prediction head for this level
+        x12_20 = self.pre2(x12_2) 
         outputs.append(x12_20)
-        # Prepare for final fusion by upsampling to the highest resolution
         x12_21 = F.interpolate(x12_2, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
 
-        # --- Decoder Level 1 ---
+        # x_1对应稍高分辨率
         x12_1 = torch.cat([x1[1], x2[1]], dim=1)
         x12_1 = self.diff_c1(x12_1) + F.interpolate(x12_2, scale_factor=2, mode='bilinear', align_corners=False)
         x12_1 = self.euclidean_distance(x1[1], x2[1]) * self.decoder_layer2[1](x12_1)
- 
-        x12_10 = self.pre1(x12_1) # Prediction head for this level
+        x12_10 = self.pre1(x12_1) 
         outputs.append(x12_10)
-        # Prepare for final fusion by upsampling to the highest resolution
         x12_11 = F.interpolate(x12_1, size=x1[0].size()[2:], mode='bilinear', align_corners=False)
         
-        # --- Decoder Level 0 (Highest Resolution) ---
+        # x_0对应最高分辨率
         x12_0 = torch.cat([x1[0], x2[0]], dim=1)
         x12_0 = self.diff_c0(x12_0) + F.interpolate(x12_1, scale_factor=2, mode='bilinear', align_corners=False)
         x12_0 = self.euclidean_distance(x1[0], x2[0]) * self.decoder_layer2[0](x12_0)
-
-        x12_00 = self.pre0(x12_0) # Prediction head for this level
+        x12_00 = self.pre0(x12_0) 
         outputs.append(x12_00)
         
-        # x12_1 = torch.cat([x1[1], x2[1]], dim=1)
-        # x12_1 = self.decoder_layer1[1](x12_1) + F.interpolate(x12_2, scale_factor=2, mode='bilinear', align_corners=False)
-        # x12_1 = self.euclidean_distance(x1[1], x2[1])*self.decoder_layer2[1](x12_1)
-        # x12_10 = self.pre5(x12_1)
-        # outputs.append(x12_10)
-        
+        # 对多级特征进行拼接，然后经过两个上采样模块和残差块，最后输出最终的变化检测结果
         x_fuse = torch.cat([x12_0, x12_11, x12_21, x12_31], dim=1)
-        # x_fuse = self.bottleneck_conv(x_fuse)
         x = self.convd2x(x_fuse)
-        #Residual block
         x = self.dense_2x(x)
-        #Upsampling x2 (x1 scale)
         x = self.convd1x(x)
-        #Residual block
         x = self.dense_1x(x)
-        #Final prediction
         cp = self.change_probability(x)
         outputs.append(cp)
-        
-        
-        # outputs = []
-        # p3_upsampled = F.interpolate(p3, size=p2.shape[-2:], mode='bilinear')
-        # p4_upsampled = F.interpolate(p4, size=p2.shape[-2:], mode='bilinear')
-        # p5_upsampled = F.interpolate(p5, size=p2.shape[-2:], mode='bilinear')        
-        
-        # fused_features = torch.cat([p2, p3_upsampled, p4_upsampled, p5_upsampled], dim=1)
-        # x = self.convd2x(fused_features)
-        # #Residual block
-        # x = self.dense_2x(x)
-        # #Upsampling x2 (x1 scale)
-        # x = self.convd1x(x)
-        # #Residual block
-        # x = self.dense_1x(x)
-        # #Final prediction
-        # cp = self.change_probability(x)
-        # outputs.append(cp)
+    
         return outputs
     
 class Base_EfficientNet(nn.Module):

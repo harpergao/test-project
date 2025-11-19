@@ -24,36 +24,98 @@ def xavier_init(module: nn.Module,
     if hasattr(module, 'bias') and module.bias is not None:
         nn.init.constant_(module.bias, bias)
 
+# def carafe(x, normed_mask, kernel_size, group=1, up=1):
+#         b, c, h, w = x.shape
+#         _, m_c, m_h, m_w = normed_mask.shape
+#         # print('x', x.shape)
+#         # print('normed_mask', normed_mask.shape)
+#         # assert m_c == kernel_size ** 2 * up ** 2
+#         assert m_h == up * h
+#         assert m_w == up * w
+#         pad = kernel_size // 2
+#         # print(pad)
+#         pad_x = F.pad(x, pad=[pad] * 4, mode='reflect')
+#         # print(pad_x.shape)
+#         unfold_x = F.unfold(pad_x, kernel_size=(kernel_size, kernel_size), stride=1, padding=0)
+#         # unfold_x = unfold_x.reshape(b, c, 1, kernel_size, kernel_size, h, w).repeat(1, 1, up ** 2, 1, 1, 1, 1)
+#         unfold_x = unfold_x.reshape(b, c * kernel_size * kernel_size, h, w)
+#         unfold_x = F.interpolate(unfold_x, scale_factor=up, mode='nearest')
+#         # normed_mask = normed_mask.reshape(b, 1, up ** 2, kernel_size, kernel_size, h, w)
+#         unfold_x = unfold_x.reshape(b, c, kernel_size * kernel_size, m_h, m_w)
+#         normed_mask = normed_mask.reshape(b, 1, kernel_size * kernel_size, m_h, m_w)
+#         res = unfold_x * normed_mask
+#         # test
+#         # res[:, :, 0] = 1
+#         # res[:, :, 1] = 2
+#         # res[:, :, 2] = 3
+#         # res[:, :, 3] = 4
+#         res = res.sum(dim=2).reshape(b, c, m_h, m_w)
+#         # res = F.pixel_shuffle(res, up)
+#         # print(res.shape)
+#         # print(res)
+#         return res
 def carafe(x, normed_mask, kernel_size, group=1, up=1):
-        b, c, h, w = x.shape
-        _, m_c, m_h, m_w = normed_mask.shape
-        # print('x', x.shape)
-        # print('normed_mask', normed_mask.shape)
-        # assert m_c == kernel_size ** 2 * up ** 2
-        assert m_h == up * h
-        assert m_w == up * w
-        pad = kernel_size // 2
-        # print(pad)
-        pad_x = F.pad(x, pad=[pad] * 4, mode='reflect')
-        # print(pad_x.shape)
-        unfold_x = F.unfold(pad_x, kernel_size=(kernel_size, kernel_size), stride=1, padding=0)
-        # unfold_x = unfold_x.reshape(b, c, 1, kernel_size, kernel_size, h, w).repeat(1, 1, up ** 2, 1, 1, 1, 1)
-        unfold_x = unfold_x.reshape(b, c * kernel_size * kernel_size, h, w)
-        unfold_x = F.interpolate(unfold_x, scale_factor=up, mode='nearest')
-        # normed_mask = normed_mask.reshape(b, 1, up ** 2, kernel_size, kernel_size, h, w)
-        unfold_x = unfold_x.reshape(b, c, kernel_size * kernel_size, m_h, m_w)
-        normed_mask = normed_mask.reshape(b, 1, kernel_size * kernel_size, m_h, m_w)
-        res = unfold_x * normed_mask
-        # test
-        # res[:, :, 0] = 1
-        # res[:, :, 1] = 2
-        # res[:, :, 2] = 3
-        # res[:, :, 3] = 4
-        res = res.sum(dim=2).reshape(b, c, m_h, m_w)
-        # res = F.pixel_shuffle(res, up)
-        # print(res.shape)
-        # print(res)
-        return res
+    b, c, h, w = x.shape
+    _, m_c, m_h, m_w = normed_mask.shape
+    
+    # --- BEGIN FIX ---
+    # 原始代码的 'group' 参数被忽略了。
+    # 我们需要动态计算实际的 group 数量。
+    # 检查 m_c (36) 是否能被 kernel_size**2 (9) 整除
+    assert m_c % (kernel_size * kernel_size) == 0, \
+        f"Mask channels ({m_c}) not divisible by kernel_size^2 ({kernel_size**2})"
+    
+    # 动态计算 group 数量 (36 / 9 = 4)
+    dynamic_group = m_c // (kernel_size * kernel_size)
+    
+    # 检查 x 的通道 c (64) 是否能被 dynamic_group (4) 整除
+    assert c % dynamic_group == 0, \
+        f"Input channels ({c}) not divisible by dynamic group size ({dynamic_group})"
+    
+    c_per_group = c // dynamic_group
+    # --- END FIX ---
+
+    # print('x', x.shape)
+    # print('normed_mask', normed_mask.shape)
+    # assert m_c == kernel_size ** 2 * up ** 2 # 这个断言是错的
+    assert m_h == up * h
+    assert m_w == up * w
+    pad = kernel_size // 2
+    # print(pad)
+    pad_x = F.pad(x, pad=[pad] * 4, mode='reflect')
+    # print(pad_x.shape)
+    unfold_x = F.unfold(pad_x, kernel_size=(kernel_size, kernel_size), stride=1, padding=0)
+    # unfold_x = unfold_x.reshape(b, c, 1, kernel_size, kernel_size, h, w).repeat(1, 1, up ** 2, 1, 1, 1, 1)
+    unfold_x = unfold_x.reshape(b, c * kernel_size * kernel_size, h, w)
+    unfold_x = F.interpolate(unfold_x, scale_factor=up, mode='nearest')
+    # normed_mask = normed_mask.reshape(b, 1, up ** 2, kernel_size, kernel_size, h, w)
+    
+    # --- MODIFIED LINE 44 ---
+    # 原始: unfold_x = unfold_x.reshape(b, c, kernel_size * kernel_size, m_h, m_w)
+    # 修正: 按 group 划分
+    unfold_x = unfold_x.reshape(b, c_per_group, dynamic_group, kernel_size * kernel_size, m_h, m_w)
+    
+    # --- MODIFIED LINE 45 (出错行) ---
+    # 原始: normed_mask = normed_mask.reshape(b, 1, kernel_size * kernel_size, m_h, m_w)
+    # 修正: 按 group 划分 (16, 1, 4, 9, 16, 16)
+    normed_mask = normed_mask.reshape(b, 1, dynamic_group, kernel_size * kernel_size, m_h, m_w)
+    
+    res = unfold_x * normed_mask
+    # test
+    # res[:, :, 0] = 1
+    # res[:, :, 1] = 2
+    # res[:, :, 2] = 3
+    # res[:, :, 3] = 4
+    
+    # --- MODIFIED LINE 57 ---
+    # 原始: res = res.sum(dim=2).reshape(b, c, m_h, m_w)
+    # 修正: 应该在 k*k (dim=3) 维度上求和，而不是 group (dim=2) 维度
+    res = res.sum(dim=3).reshape(b, c, m_h, m_w)
+    
+    # res = F.pixel_shuffle(res, up)
+    # print(res.shape)
+    # print(res)
+    return res
 
 def normal_init(module, mean=0, std=1, bias=0):
     if hasattr(module, 'weight') and module.weight is not None:
@@ -200,14 +262,14 @@ class FreqFusion(nn.Module):
         mask = mask.view(n, mask_channel, -1, h, w)
         mask = F.softmax(mask, dim=2, dtype=mask.dtype)
         mask = mask.view(n, mask_channel, kernel, kernel, h, w)
-        mask = mask.permute(0, 1, 4, 5, 2, 3).view(n, -1, kernel, kernel)
+        mask = mask.permute(0, 1, 4, 5, 2, 3).reshape(n, -1, kernel, kernel)
         # mask = F.pad(mask, pad=[padding] * 4, mode=self.padding_mode) # kernel + 2 * padding
         mask = mask * hamming
         mask /= mask.sum(dim=(-1, -2), keepdims=True)
         # print(hamming)
         # print(mask.shape)
         mask = mask.view(n, mask_channel, h, w, -1)
-        mask =  mask.permute(0, 1, 4, 2, 3).view(n, -1, h, w).contiguous()
+        mask =  mask.permute(0, 1, 4, 2, 3).reshape(n, -1, h, w).contiguous()
         return mask
 
     def forward(self, hr_feat, lr_feat, use_checkpoint=False): # use check_point to save GPU memory

@@ -5,8 +5,8 @@
 export CUDA_VISIBLE_DEVICES=0,1
 
 #Set paths
-checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/base_efficientnet_b4_FPNCD_CosineAnnealing
-vis_root=/data/gyf/newtest/ChangeFormer/vis3/base_efficientnet_b4_FPNCD_CosineAnnealing       #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/data/gyf/newtest/ChangeFormer/checkpoint3/changeformerV6_freq
+vis_root=/data/gyf/newtest/ChangeFormer/vis3/changeformerV6_freq      #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
@@ -16,7 +16,7 @@ lr=0.0002        #!!!BEFORE 0.0001 !!! The learning rate for the optimizer, whic
 max_epochs=201
 embed_dim=256
 
-net_G=base_efficientnet_b4       #ChangeFormerV6 is the finalized verion
+net_G=ChangeFormerV6       #ChangeFormerV6 is the finalized verion
                             # The G likely stands for "Generator.
 
 lr_policy=linear

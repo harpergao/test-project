@@ -16,6 +16,8 @@ from abc import ABCMeta, abstractmethod
 # from mmcv.cnn import normal_init
 # from mmcv.cnn import ConvModule
 import pdb
+from fpn import FPN
+from FreqFusion import FreqFusion
 
 from scipy.io import savemat
 
@@ -1515,16 +1517,41 @@ class DecoderTransformer_v4(nn.Module):
         self.output_nc       = output_nc
         c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
 
+        self.fpn = FPN(
+            in_channels=[c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels], # 刚刚动态获取的通道数列表
+            out_channels=self.embedding_dim,       # FPN 输出的所有特征图的统一通道数，256 是一个常用值
+            num_outs=4 # FPN 输出的特征图数量，通常和输入数量一致
+            )
+        
         #MLP decoder heads
         self.linear_c4 = MLP(input_dim=c4_in_channels, embed_dim=self.embedding_dim)
         self.linear_c3 = MLP(input_dim=c3_in_channels, embed_dim=self.embedding_dim)
         self.linear_c2 = MLP(input_dim=c2_in_channels, embed_dim=self.embedding_dim)
         self.linear_c1 = MLP(input_dim=c1_in_channels, embed_dim=self.embedding_dim)
 
-        self.STAttentionModule_c4 = SpatiotemporalAttentionFull(in_channels=c4_in_channels)
-        self.STAttentionModule_c3 = SpatiotemporalAttentionFull(in_channels=c3_in_channels)
-        self.STAttentionModule_c2 = SpatiotemporalAttentionFull(in_channels=c2_in_channels)
-        self.STAttentionModule_c1 = SpatiotemporalAttentionFull(in_channels=c1_in_channels)
+        # self.STAttentionModule_c4 = SpatiotemporalAttentionFull(in_channels=c4_in_channels)
+        # self.STAttentionModule_c3 = SpatiotemporalAttentionFull(in_channels=c3_in_channels)
+        # self.STAttentionModule_c2 = SpatiotemporalAttentionFull(in_channels=c2_in_channels)
+        # self.STAttentionModule_c1 = SpatiotemporalAttentionFull(in_channels=c1_in_channels)
+        
+        self.fusion_c3 = FreqFusion(
+            hr_channels=self.embedding_dim,
+            lr_channels=self.embedding_dim,
+            scale_factor=2,
+            feature_resample=True,
+        )
+        self.fusion_c2 = FreqFusion(
+            hr_channels=self.embedding_dim,
+            lr_channels=self.embedding_dim,
+            scale_factor=2,
+            feature_resample=True
+        )
+        self.fusion_c1 = FreqFusion(
+            hr_channels=self.embedding_dim,
+            lr_channels=self.embedding_dim,
+            scale_factor=2,
+            feature_resample=True,
+        )
 
         #convolutional Difference Modules
         self.diff_c4   = conv_diff(in_channels=2*self.embedding_dim, out_channels=self.embedding_dim)
@@ -1580,23 +1607,37 @@ class DecoderTransformer_v4(nn.Module):
             inputs = inputs[self.in_index]
 
         return inputs
+    
+    def change_feature(self, x, y):
+        i = 2
+        for index in range(0, len(x), i):
+            x[index], y[index] = y[index], x[index]
+        return x, y
+    
+    
 
     def forward(self, inputs1, inputs2):
         #Transforming encoder features (select layers)
         x_1 = self._transform_inputs(inputs1)  # len=4, 1/2, 1/4, 1/8, 1/16
         x_2 = self._transform_inputs(inputs2)  # len=4, 1/2, 1/4, 1/8, 1/16
 
+        # x_1, x_2 = self.change_feature(x_1, x_2)
+        # x_1 = self.fpn(x_1)
+        # x_2 = self.fpn(x_2)
+        # x_1, x_2 = self.change_feature(list(x_1), list(x_2))
+
         #img1 and img2 features
         c1_1, c2_1, c3_1, c4_1 = x_1
         c1_2, c2_2, c3_2, c4_2 = x_2
 
         ############## MLP decoder on C1-C4 ###########
+
         n, _, h, w = c4_1.shape
 
         outputs = []
         # Stage 4: x1/32 scale
         
-        c4_1, c4_2 = self.STAttentionModule_c4(c4_1, c4_2)
+        # c4_1, c4_2 = self.STAttentionModule_c4(c4_1, c4_2)
         
         _c4_1 = self.linear_c4(c4_1).permute(0,2,1).reshape(n, -1, c4_1.shape[2], c4_1.shape[3])
         _c4_2 = self.linear_c4(c4_2).permute(0,2,1).reshape(n, -1, c4_2.shape[2], c4_2.shape[3])
@@ -1608,33 +1649,42 @@ class DecoderTransformer_v4(nn.Module):
 
         # Stage 3: x1/16 scale
         
-        c3_1, c3_2 = self.STAttentionModule_c3(c3_1, c3_2)
+        # c3_1, c3_2 = self.STAttentionModule_c3(c3_1, c3_2)
         
         _c3_1 = self.linear_c3(c3_1).permute(0,2,1).reshape(n, -1, c3_1.shape[2], c3_1.shape[3])
         _c3_2 = self.linear_c3(c3_2).permute(0,2,1).reshape(n, -1, c3_2.shape[2], c3_2.shape[3])
-        _c3   = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1)) + F.interpolate(_c4, scale_factor=2, mode="bilinear")
+        # _c3   = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1)) + F.interpolate(_c4, scale_factor=2, mode="bilinear")
+        _c3 = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1))
+        _, hr_c3, lr_c4 = self.fusion_c3(hr_feat=_c3, lr_feat=_c4)
+        _c3 = hr_c3 + lr_c4
         p_c3  = self.make_pred_c3(_c3)
         outputs.append(p_c3)
         _c3_up= resize(_c3, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 2: x1/8 scale
         
-        c2_1, c2_2 = self.STAttentionModule_c2(c2_1, c2_2)
+        # c2_1, c2_2 = self.STAttentionModule_c2(c2_1, c2_2)
         
         _c2_1 = self.linear_c2(c2_1).permute(0,2,1).reshape(n, -1, c2_1.shape[2], c2_1.shape[3])
         _c2_2 = self.linear_c2(c2_2).permute(0,2,1).reshape(n, -1, c2_2.shape[2], c2_2.shape[3])
-        _c2   = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1)) + F.interpolate(_c3, scale_factor=2, mode="bilinear")
+        # _c2   = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1)) + F.interpolate(_c3, scale_factor=2, mode="bilinear")
+        _c2 = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1))
+        _, hr_c2, lr_c3 = self.fusion_c2(hr_feat=_c2, lr_feat=_c3)
+        _c2 = hr_c2 + lr_c3
         p_c2  = self.make_pred_c2(_c2)
         outputs.append(p_c2)
         _c2_up= resize(_c2, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 1: x1/4 scale
         
-        c1_1, c1_2 = self.STAttentionModule_c1(c1_1, c1_2)
+        # c1_1, c1_2 = self.STAttentionModule_c1(c1_1, c1_2)
         
         _c1_1 = self.linear_c1(c1_1).permute(0,2,1).reshape(n, -1, c1_1.shape[2], c1_1.shape[3])
         _c1_2 = self.linear_c1(c1_2).permute(0,2,1).reshape(n, -1, c1_2.shape[2], c1_2.shape[3])
-        _c1   = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1)) + F.interpolate(_c2, scale_factor=2, mode="bilinear")
+        # _c1   = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1)) + F.interpolate(_c2, scale_factor=2, mode="bilinear")
+        _c1 = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1))
+        _, hr_c1, lr_c2 = self.fusion_c1(hr_feat=_c1, lr_feat=_c2)
+        _c1 = hr_c1 + lr_c2
         p_c1  = self.make_pred_c1(_c1)
         outputs.append(p_c1)
 
@@ -1689,8 +1739,7 @@ class DecoderTransformer_v3(nn.Module):
         self.in_channels     = in_channels
         self.embedding_dim   = embedding_dim
         self.output_nc       = output_nc
-        c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
-
+        c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels        
         #MLP decoder heads
         self.linear_c4 = MLP(input_dim=c4_in_channels, embed_dim=self.embedding_dim)
         self.linear_c3 = MLP(input_dim=c3_in_channels, embed_dim=self.embedding_dim)
@@ -1725,7 +1774,9 @@ class DecoderTransformer_v3(nn.Module):
         
         #Final activation
         self.output_softmax     = decoder_softmax
-        self.active             = nn.Sigmoid() 
+        self.active             = nn.Sigmoid()
+        
+
 
     def _transform_inputs(self, inputs):
         """Transform inputs for decoder.
@@ -1751,7 +1802,7 @@ class DecoderTransformer_v3(nn.Module):
             inputs = inputs[self.in_index]
 
         return inputs
-
+    
     def forward(self, inputs1, inputs2):
         #Transforming encoder features (select layers)
         x_1 = self._transform_inputs(inputs1)  # len=4, 1/2, 1/4, 1/8, 1/16
@@ -1761,7 +1812,7 @@ class DecoderTransformer_v3(nn.Module):
         c1_1, c2_1, c3_1, c4_1 = x_1
         c1_2, c2_2, c3_2, c4_2 = x_2
 
-        ############## MLP decoder on C1-C4 ###########
+        ############## MLP decoder on C1-C4 ###########        
         n, _, h, w = c4_1.shape
 
         outputs = []
@@ -1896,3 +1947,19 @@ class ChangeFormerV6(nn.Module):
 
         # exit()
         return cp
+    
+class FFormer(nn.Module):
+    def __init__(self, input_nc=3, output_nc=2, decoder_softmax=False, embed_dim=256):
+        super(FFormer, self).__init__()
+        #Transformer Encoder
+        self.embed_dims = [64, 128, 320, 512]
+        self.depths     = [3, 3, 4, 3] #[3, 3, 6, 18, 3]
+        self.embedding_dim = embed_dim
+        self.drop_rate = 0.1
+        self.attn_drop = 0.1
+        self.drop_path_rate = 0.1 
+
+        self.Tenc_x2    = EncoderTransformer_v3(img_size=256, patch_size = 7, in_chans=input_nc, num_classes=output_nc, embed_dims=self.embed_dims,
+                    num_heads = [1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=True, qk_scale=None, drop_rate=self.drop_rate,
+                    attn_drop_rate = self.attn_drop, drop_path_rate=self.drop_path_rate, norm_layer=partial(nn.LayerNorm, eps=1e-6),
+                    depths=self.depths, sr_ratios=[8, 4, 2, 1])

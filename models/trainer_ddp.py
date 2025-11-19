@@ -103,7 +103,7 @@ class CDTrainer():
         self.checkpoint_dir = args.checkpoint_dir
         self.vis_dir = args.vis_dir
 
-        self.part_loss = [0.0] * 5  # for 4 multi-scale loss recording and 1 cos value.
+        # self.part_loss = [0.0] * 5  # for 4 multi-scale loss recording and 1 cos value.
 
         self.shuffle_AB = args.shuffle_AB
 
@@ -112,14 +112,15 @@ class CDTrainer():
         self.multi_scale_infer = args.multi_scale_infer
         
         self.initial_weights = tuple(args.multi_pred_weights)
-        self.final_weights = [0.0, 0.0, 0.0, 0.0, 1.0]
-        self.weight_scheduler = LossWeightAnnealing(
-            initial_weights=self.initial_weights,
-            final_weights=self.final_weights,
-            total_epochs=self.max_num_epochs,
-            warmup_epochs=50,       # 50轮预热
-            decay_end_epoch=150     # 在第150轮衰减到0
-        )
+        # 权重余弦退火平滑
+        # self.final_weights = [0.0, 0.0, 0.0, 0.0, 1.0]
+        # self.weight_scheduler = LossWeightAnnealing(
+        #     initial_weights=self.initial_weights,
+        #     final_weights=self.final_weights,
+        #     total_epochs=self.max_num_epochs,
+        #     warmup_epochs=50,       # 50轮预热
+        #     decay_end_epoch=150     # 在第150轮衰减到0
+        # )
         self.weights = self.initial_weights
         
         if args.loss == 'ce':
@@ -232,10 +233,10 @@ class CDTrainer():
         if self.rank == 0:
             imps, est = self._timer_update()
             if np.mod(self.batch_id, 100) == 1:
-                message = 'Is_training: %s. [%d,%d][%d,%d], imps: %.2f, est: %.2fh, G_loss: %.5f, (L1: %.5f, L2: %.5f, L3: %.5f, L4: %.5f, cosV: %.5f), running_mf1: %.5f\n' %\
+                message = 'Is_training: %s. [%d,%d][%d,%d], imps: %.2f, est: %.2fh, G_loss: %.5f, running_mf1: %.5f\n' %\
                           (self.is_training, self.epoch_id, self.max_num_epochs-1, self.batch_id, m,
                          imps*self.batch_size*int(os.environ['WORLD_SIZE']), est, # DDP: imps reflects total imps
-                         self.G_loss.item(), self.part_loss[0], self.part_loss[1], self.part_loss[2], self.part_loss[3], self.part_loss[4], running_acc)
+                         self.G_loss.item(), running_acc)
                 self.logger.write(message)
 
             if np.mod(self.batch_id, 500) == 1:
@@ -335,16 +336,16 @@ class CDTrainer():
         if self.multi_scale_train == "True":
             i         = 0
             temp_loss = 0.0
-            self.weights = self.weight_scheduler.get_weights(self.epoch_id)
+            # self.weights = self.weight_scheduler.get_weights(self.epoch_id)
             for pred in self.G_pred:
                 if pred.size(2) != gt.size(2):
                     temp_loss1 = self.weights[i]*self._pxl_loss(pred, F.interpolate(gt, size=pred.size(2), mode="nearest"))
                 else:
                     temp_loss1 = self.weights[i]*self._pxl_loss(pred, gt)
-                self.part_loss[i] = temp_loss1.item()
+                # self.part_loss[i] = temp_loss1.item()
                 temp_loss += temp_loss1
                 i+=1
-            self.part_loss[4] = self.weights[0] * 5.0  # record the cos weight
+            # self.part_loss[4] = self.weights[0] * 5.0  # record the cos weight
             self.G_loss = temp_loss
         else:
             self.G_loss = self._pxl_loss(self.G_pred[-1], gt)
