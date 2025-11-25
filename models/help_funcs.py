@@ -352,18 +352,17 @@ class LossWeightAnnealing:
             return current_weights.tolist()
 
 # 有时侯需要多次使用 HINet 模块
-class HINet_Module:
+class HINet_Module(nn.Module):
     """
-    实现了基于  的半实例归一化 (Half-Instance Normalization) 模块。
-    此模块用于时相归一化，以解耦“内容”（地物结构）和“风格”（光照/大气）。
+    半实例归一化 (Half-Instance Normalization) 模块。
     """
-    def __init__(self, C):
+    def __init__(self, in_channels):
         # 假设输入通道为 C，模块内部扩展通道为 2C
-        super(HINet_Module, self).__init__()
-        self.conv_expand = nn.Conv2d(C, 2*C, kernel_size=1)
-        self.instance_norm = nn.InstanceNorm2d(C)
-        self.conv_3x3 = nn.Conv2d(2*C, C, kernel_size=3, stride=1, padding=1)
-        self.conv_residual = nn.Conv2d(2*C, C, kernel_size=1)
+        super().__init__()
+        self.conv_expand = nn.Conv2d(in_channels, 2*in_channels, kernel_size=1)
+        self.instance_norm = nn.InstanceNorm2d(in_channels)
+        self.conv_3x3 = nn.Conv2d(2*in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+        self.conv_residual = nn.Conv2d(2*in_channels, in_channels, kernel_size=1)
         self.leaky_relu = nn.LeakyReLU(0.2, inplace=True)
         
     def forward(self, x):
@@ -387,24 +386,13 @@ class HINet_Module:
         return F_out
 
 class PFA_Module(nn.Module):
-    """
-    实现了渐进式特征对齐 (PFA) 模块。
-    该模块借鉴了  的思想，包含一个“偏移量预测器”和一个“可学习插值函数 (LIF)”。
-    LIF 通过 F.grid_sample 实现，根据预测的偏移量重采样 T2 特征，使其与 T1 对齐 。
-    但是：
-    PFA(基于偏移的特征重采样)不是修复光照 / 季节 / 大气导致的“外观差异
-    (radiometric/photometric)”的理想工具,但在处理小的几何错位(misregistration、视角/配准误差、地形视差）时很有用
-    """
     def __init__(self, in_channels, reduction_channels=None):
         super(PFA_Module, self).__init__()
         
-        # [不确定点]：偏移量预测器的具体结构
+
         if reduction_channels is None:
             reduction_channels = in_channels // 2 if in_channels > 4 else in_channels
             
-        # "偏移量预测器 (Offset Generator)" 
-        # 输入是 T1 和 T2 特征的拼接 (in_channels * 2)
-        # 输出是 2 个通道 (dx, dy)
         self.offset_predictor = nn.Sequential(
             nn.Conv2d(in_channels * 2, reduction_channels, kernel_size=3, padding=1, bias=True),
             nn.LeakyReLU(0.2, inplace=True),
@@ -412,29 +400,18 @@ class PFA_Module(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(reduction_channels, 2, kernel_size=3, padding=1, bias=True)
         )
-        
-        # [不确定点]：偏移量范围
-        # 我们初始化最后的卷积层偏置为 0，使其在训练初期接近恒等映射
+
         self.offset_predictor[-1].bias.data.zero_()
 
     def forward(self, f_t1_norm, f_t2_norm):
-        """
-        f_t1_norm: 归一化后的 T1 特征 (用作参考)
-        f_t2_norm: 归一化后的 T2 特征 (将被重采样)
-        """
         B, C, H, W = f_t2_norm.shape
         
-        # 1. 预测偏移场 (Delta) 
+
         f_combined = torch.cat([f_t1_norm, f_t2_norm], dim=1)
-        # offsets 形状为 (B, 2, H, W)，代表 (dx, dy)
         offsets = self.offset_predictor(f_combined) 
         
         offsets = torch.tanh(offsets) * 0.5
-        
-        # 2. "可学习插值函数 (LIF)" 
-        # F.grid_sample 需要一个标准化的网格 (-1, 1) 和 (x, y) 顺序
-        
-        # 创建一个基础网格 (B, H, W, 2)，值为 -1 到 1
+
         x_coords = torch.linspace(-1.0, 1.0, W, device=f_t2_norm.device, dtype=f_t2_norm.dtype)
         y_coords = torch.linspace(-1.0, 1.0, H, device=f_t2_norm.device, dtype=f_t2_norm.dtype)
         y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
@@ -443,20 +420,11 @@ class PFA_Module(nn.Module):
         base_grid = torch.stack([x_grid, y_grid], dim=-1)
         base_grid = base_grid.unsqueeze(0).repeat(B, 1, 1, 1) # (B, H, W, 2)
         
-        # 转换偏移量格式以匹配网格
         # (B, 2, H, W) -> (B, H, W, 2)
         offsets_permuted = offsets.permute(0, 2, 3, 1)
         
-        # [不确定点]：偏移量尺度
-        # 我们假设预测的偏移量是*相对*于归一化网格的。
-        # 例如，偏移量 0.1 大约等于 H/10 或 W/10 像素。
-        # 不使用 Tanh 是为了让网络学习绝对尺度。
-        
-        # 3. 应用偏移量
-        # 公式: F_T2_aligned(i) = LIF(F_T2_norm(i), Delta(i)) 
         final_grid = base_grid + offsets_permuted
-        
-        # 执行可微分的双线性插值 
+         
         f_t2_aligned = F.grid_sample(
             f_t2_norm, 
             final_grid, 
@@ -486,11 +454,7 @@ class HINET(nn.Module):
         
         return f_T1_norm, f_T2_norm
 
-
-# ---------------------------------------------------------------------------
-# 辅助模块：来自 "winet.py"  (论文 ) 的 DWT 和 IWT 实现
-# ---------------------------------------------------------------------------
-
+# from "Pan-Sharpening With Wavelet-Enhanced High-Frequency Information"
 class DWT(nn.Module):
     """
     基于 winet.py  的离散小波变换（Haar）实现。
@@ -564,15 +528,11 @@ class IWT(nn.Module):
         
         return x
 
-# ---------------------------------------------------------------------------
-# 辅助模块：实现 FreqFusion  中的空间可变滤波
-# ---------------------------------------------------------------------------
 
+# 实现 FreqFusion  中的空间可变滤波
 class _SpatiallyVariantConvolution(nn.Module):
     """
-    辅助模块，用于应用空间可变（即每像素不同）的 2D 卷积核。
-    这是对 FreqFusion  中 'carafe' 函数概念的
-    一个标准、无依赖的实现。
+    用于应用空间可变（即每像素不同）的 2D 卷积核。
     """
     def __init__(self, kernel_size):
         super(_SpatiallyVariantConvolution, self).__init__()
@@ -606,7 +566,6 @@ class _SpatiallyVariantConvolution(nn.Module):
 
         # 3. 应用空间可变核
         # (B, C, K*K, H*W) * (B, 1, K*K, H*W) -> (B, C, K*K, H*W)
-        # 广播机制使同一个 (K*K) 核应用于所有 C 个通道
         weighted_patches = features_unfolded * kernels
         
         # 4. 求和得到卷积结果 (对 K*K 维度求和)
@@ -620,8 +579,6 @@ class _AdaptiveFilterPredictor(nn.Module):
     """
     FreqFusion  中描述的 "小型 CNN"  的一个实现，
     用于预测空间可变的核权重。
-    [不确定点]：确切的架构未指定，这里使用一个
-    受 winet.py  中融合块启发的 Conv-ReLU-Conv 结构。
     """
     def __init__(self, in_channels, kernel_size, mid_channels_ratio=0.5):
         super(_AdaptiveFilterPredictor, self).__init__()
@@ -644,17 +601,14 @@ class _AdaptiveFilterPredictor(nn.Module):
         # 输出 (B, K*K, H, W)
         return self.predictor(x)
 
-# ---------------------------------------------------------------------------
-# FAFF 核心组件：LFDF 和 HFDF
-# ---------------------------------------------------------------------------
 
+# LFDF 和 HFDF
 class LFDF(nn.Module):
     """
     低频差异滤波器 (LFDF)。
     借鉴 FreqFusion  (ALPF) 的思想 ：预测空间可变的低通（平滑）核，
-    以抑制低频差异图 (Diff_LL) 中的季节性/光照伪变化 [2]。
     """
-    def __init__(self, in_channels, kernel_size=5): # K=5 经 FreqFusion  表 XIII 确认
+    def __init__(self, in_channels, kernel_size=5): # K=5 
         super(LFDF, self).__init__()
         self.kernel_size = kernel_size
         
@@ -673,8 +627,6 @@ class LFDF(nn.Module):
         kernels = self.predictor(diff_ll)
         
         # 2. 归一化核，使其成为低通滤波器 (Low-Pass Filter)
-        #    FreqFusion  的核心机制：使用 Softmax
-        #    确保核的权重为正且总和为 1，从而实现平滑效果 。
         kernels = F.softmax(kernels.view(B, KK, H*W), dim=1) # 在 K*K 维度上 Softmax
         kernels = kernels.view(B, KK, H, W)
         
@@ -686,11 +638,8 @@ class LFDF(nn.Module):
 class HFDF(nn.Module):
     """
     高频差异滤波器 (HFDF)。
-    借鉴 FreqFusion  (AHPF) 的思想 ：通过 (Identity - LPF) 
-    来预测空间可变的高通（锐化）核，
-    以增强高频差异图 (Diff_HF) 中的真实边缘 。
     """
-    def __init__(self, in_channels, kernel_size=3): # K=3 经 FreqFusion  表 XIII 确认
+    def __init__(self, in_channels, kernel_size=3): # K=3
         super(HFDF, self).__init__()
         # 建议(ChatGPT) 对 HFDF 进行 multi-kernel size 融合,高频差异原本就复杂，推荐K=3 + K=5 两个 HPF,Concat → 1x1 Conv
         self.kernel_size = kernel_size
@@ -714,7 +663,7 @@ class HFDF(nn.Module):
         B, C, H, W = diff_hf.shape
         KK = self.kernel_size * self.kernel_size
         
-        # 1. 预测空间可变的 LPF 核 (B, K*K, H, W)
+        # 1. (B, K*K, H, W)
         lpf_kernels = self.predictor(diff_hf)
         
         # 2. 归一化核，使其成为低通滤波器 (LPF)
@@ -731,7 +680,6 @@ class HFDF(nn.Module):
         return filtered_hf
     
 # 建议5：SE 注意力模块（用于 IDWT 前增强）
-# ==========================================================
 class SEBlock(nn.Module):
     def __init__(self, channels, r=8):
         super().__init__()
@@ -747,14 +695,11 @@ class SEBlock(nn.Module):
         w = self.fc(x)
         return x * w
     
-# ---------------------------------------------------------------------------
 # 核心模块：FAFF (频率域自适应滤波)
-# ---------------------------------------------------------------------------
 
 class FAFF(nn.Module):
     """
-    核心组件二：频率域自适应滤波模块 (FAFF)
-    
+    频率域自适应滤波模块 (FAFF)
     1. 使用 DWT (来自 WINet [1, 1]) 将对齐的 T1 和 T2 特征分解 。
     2. 计算子带差异图 (Diff_LL, Diff_HF)。
     3. 应用 LFDF (类 ALPF ) 抑制 Diff_LL 中的伪变化 。
@@ -764,15 +709,15 @@ class FAFF(nn.Module):
     def __init__(self, in_channels):
         super(FAFF, self).__init__()
         
-        # 1. 初始化 DWT 和 IWT (来自 winet.py )
+        # 1. 初始化 DWT 和 IDWT 模块
         self.dwt = DWT()
         self.idwt = IWT()
         
         self.in_channels = in_channels
-        # 3 个高频子带 (LH, HL, HH)  将被拼接
+        # 3 个高频子带 (LH, HL, HH) 拼接
         self.hf_channels = in_channels * 3 
         
-        # 2. 初始化自适应滤波器 (借鉴 FreqFusion )
+        # 2. 初始化自适应滤波器
         # 低频滤波器 (K=5) 
         self.lfdf_filter = LFDF(in_channels=in_channels, kernel_size=5)
         
@@ -780,17 +725,10 @@ class FAFF(nn.Module):
         self.hfdf_filter = HFDF(in_channels=self.hf_channels, kernel_size=3)
 
     def forward(self, F_T1_norm, F_T2_aligned):
-        """
-        输入:
-            F_T1_norm (torch.Tensor): 归一化的 T1 特征 (B, C, H, W)
-            F_T2_aligned (torch.Tensor): 归一化且对齐的 T2 特征 (B, C, H, W)
-        输出:
-            D_freq_clean (torch.Tensor): 频率域清洁差异图 (B, C, H, W)
-        """
         # 建议 6：在整个 FAFF 前加一个 deformable alignment（非常有效）
         # T2_feature_aligned = DeformAlign(F_T2, F_T1)
         
-        # 1. DWT 分解 (来自 WINet [1, 1])
+        # 1. DWT 分解
         # LL: (B, C, H/2, W/2)
         # HFs: (B, C, 3, H/2, W/2)
         LL_T1, HFs_T1 = self.dwt(F_T1_norm)
@@ -804,10 +742,10 @@ class FAFF(nn.Module):
         B, C, _, H_d, W_d = Diff_HFs.shape
         Diff_HF_reshaped = Diff_HFs.view(B, self.hf_channels, H_d, W_d)
 
-        # 3. 应用自适应低频滤波 (借鉴 ALPF )
+        # 3. 应用自适应低频滤波
         Filtered_Diff_LL = self.lfdf_filter(Diff_LL)
         
-        # 4. 应用自适应高频滤波 (借鉴 AHPF )
+        # 4. 应用自适应高频滤波
         Filtered_Diff_HF_reshaped = self.hfdf_filter(Diff_HF_reshaped)
         
         # 5. 恢复 HF 子带形状
@@ -816,7 +754,7 @@ class FAFF(nn.Module):
         
         # 6. IDWT 重构 (来自 WINet [1, 1])
         # 建议5：在 IDWT 前加入轻量级注意力增强，Filtered_Diff_LL → SE/CBAM，Filtered_Diff_HF → SE/CBAM
-        D_freq_clean = self.idwt((Filtered_Diff_LL, Filtered_Diff_HFs))
+        D_freq_clean = self.idwt(Filtered_Diff_LL, Filtered_Diff_HFs)
         
         return D_freq_clean
     
@@ -832,7 +770,7 @@ class FAFF(nn.Module):
 # 1. 空间注意力的卷积核大小 (Spatial Attention Kernel Size):
 #    -  (SAFFM 论文) 在其公式(2)和图2中指定了一个 3x3 卷积核 。
 #    - (winet.py 分析) 和  (CBAM 论文) 使用了一个 7x7 的卷积核。
-#    - 决定: 我们将使用 7x7 卷积核，因为它在空间注意力模块中是一个更广泛的标准（如 CBAM  和 `winet.py` 所示），但这与  论文中的 3x3 规定不同，因此标记为不确定。
+#    - 使用 7x7 卷积核，因为它在空间注意力模块中是一个更广泛的标准（如 CBAM  和 `winet.py` 所示），但这与 论文中的 3x3 规定不同，因此标记为不确定。
 #
 # 2. “频率注意力分支”的架构:
 #    - 报告第 5.2 节提到，借鉴  的“MLP 结构”（即通道注意力）。
@@ -843,15 +781,11 @@ class FAFF(nn.Module):
 
 class _SpatialAttentionModule(nn.Module):
     """
-    一个辅助模块，用于生成空间注意力图。
-    灵感来自  (SAFFM) 的公式 (2) 和  (CBAM) 的空间注意力设计。
-    它沿着通道维度应用 MaxPool 和 AvgPool，拼接它们，
-    然后通过一个卷积层和 sigmoid 。
+    生成空间注意力图。
     """
-    def __init__(self, kernel_size=7): # [不确定点 1]
+    def __init__(self, kernel_size=7):
         super(_SpatialAttentionModule, self).__init__()
         
-        #  (SAFFM 论文) 使用 3x3。
         # (winet.py) 和  (CBAM) 使用 7x7。
         padding = (kernel_size - 1) // 2
         
@@ -884,11 +818,7 @@ class _SpatialAttentionModule(nn.Module):
 
 class CAGM(nn.Module):
     """
-    核心组件三：变化注意力指导模块 (CAGM)
-    
-    借鉴  (SAFFM) 的思想，此模块通过交叉验证
-    “空间域证据” (D_spatial) 和“频率域证据” (D_freq_clean)
-    来生成一个高置信度的变化指导图 。
+    变化注意力指导模块 (CAGM)
     """
     def __init__(self, in_channel, out_channels, kernel_size=7):
         super(CAGM, self).__init__()
@@ -896,7 +826,7 @@ class CAGM(nn.Module):
         # 改动1：添加一个轻量级的空间平滑层
         self.spatial_smooth = nn.Sequential(
             nn.Conv2d(
-                in_channels=in_channel,  # <-- 下面 forward 中动态替换
+                in_channels=in_channel,  
                 out_channels=out_channels,
                 kernel_size=3,
                 padding=1,
@@ -905,71 +835,46 @@ class CAGM(nn.Module):
         )
         
         # 1. 空间注意力分支 (来自 D_spatial)
-        #    (基于报告 5.2 节 和  公式 2)
         self.spatial_attn_branch = _SpatialAttentionModule(kernel_size)
         
         # 2. 频率注意力分支 (来自 D_freq_clean)
-        #    (基于报告 5.2 节 和  公式 2)
-        #    [不确定点 2]: 使用空间注意力模块来实现报告 5.1 节的"逻辑与"门控
         self.freq_attn_branch = _SpatialAttentionModule(kernel_size)
 
     def forward(self, D_spatial, D_freq_clean):
-        """
-        输入:
-            D_spatial (torch.Tensor): 空间域差异图 (B, C, H, W)
-            D_freq_clean (torch.Tensor): 频率域清洁差异图 (B, C, H, W)
-        输出:
-            Fused_Feature (torch.Tensor): 经过指导和验证的融合特征 (B, C, H, W)
-        """
-        
         # 1. 生成空间注意力图 A_spatial
-        #    (对应  中的 W_p)
+        
         # 风险 1：D_spatial 噪声太大可能干扰 gat. 可以加轻量平滑D_spatial_smooth = Conv3x3(D_spatial)或D_spatial → BatchNorm → ReLU → Conv → Gate
         D_spatial = self.spatial_smooth(D_spatial)
         A_spatial = self.spatial_attn_branch(D_spatial)
         
         # 2. 生成频率注意力图 A_freq
-        #    (这是对  的改编，用于实现双重验证)
+        
         A_freq = self.freq_attn_branch(D_freq_clean)
         
         # 3. 生成变化指导图 (Change Guidance Map)
-        #    (对应  中的 GM = W_p * W_m, 公式 4)
-        #    这里我们执行 A_spatial * A_freq 来实现“逻辑与”
         # 改动2：Soft Gate
         Gate = torch.sigmoid(A_spatial + A_freq)
         
         # Change_Guidance_Map = A_spatial * A_freq # 逐元素相乘 (Hadamard product) 
         
         # 4. 指导解码器进行多尺度特征融合
-        #    (对应  中的 GM ⊗ F, 公式 5)
-        #    我们只门控“干净”的 D_freq_clean 特征 (根据报告 5.3 节)
         # 改动3：双流融合
         Fused_Feature = D_freq_clean * Gate + D_spatial * (1 - Gate)
         # 改动4：残差连接，增强频率特征
-        Fused_Feature = Fused_Feature + 0.1 *D_freq_clean  
+        # Fused_Feature = Fused_Feature + 0.1 *D_freq_clean  
         
         return Fused_Feature
     
 class BoundaryRefinementHead(nn.Module):
     """
-    报告 6.2 节描述的边界精炼头 (BRH)。
-    
-    此模块借鉴  (FreqFusion)  和  (Modality-aware...)  的思想，
-    在解码器的*输出端*解决边界模糊问题 [3, 1]。
-    
-    它使用一个 "偏移量生成器" [1, 1] (小型 CNN) 来预测一个 2D 偏移场 (Delta)，
-    然后使用 "LIF"  (可学习插值函数, 即 F.grid_sample) 来
-    重采样 (resample) 最终的解码器特征图，使其边界更锐利。
+    边界精炼头 (BRH)。
     """
-    def __init__(self, in_channels, reduction_channels=None):
-        """
-        Args:
-            in_channels (int): 解码器最终输出特征图的通道数 (例如 64)。
-        """
+    def __init__(self, in_channels, reduction_channels=None, max_offset_scale=0.05):
+
         super(BoundaryRefinementHead, self).__init__()
-        
+        self.max_offset_scale = max_offset_scale
         # [不确定点 2]: 偏移量预测器的确切架构未指定。
-        # 我们使用一个轻量级的 CNN，类似于第 3 部分的 PFA 模块 。
+        # 使用一个轻量级的 CNN，类似于第 3 部分的 PFA 模块
         if reduction_channels is None:
             reduction_channels = in_channels // 2 if in_channels > 4 else in_channels
             
@@ -985,22 +890,15 @@ class BoundaryRefinementHead(nn.Module):
         self.offset_predictor[-1].bias.data.zero_()
 
     def forward(self, F_decoder_final):
-        """
-        Args:
-            F_decoder_final (torch.Tensor): (B, C, H, W) 解码器的最后阶段特征图
         
-        Returns:
-            F_refined (torch.Tensor): (B, C, H, W) 经过边界对齐的特征图
-        """
         B, C, H, W = F_decoder_final.shape
         
         # 1. 预测边界偏移场 (Delta_boundary) [1, 1]
         # offsets 形状: (B, 2, H, W)
         offsets = self.offset_predictor(F_decoder_final)
         # 改动1:限制偏移范围，防止不稳定
-        offsets = torch.tanh(offsets) * 0.05
+        offsets = torch.tanh(offsets) * self.max_offset_scale
         # 2. 创建用于 F.grid_sample (LIF) 的基础网格 
-        #    (F.grid_sample 需要标准化的 (-1, 1) 坐标)
         x_coords = torch.linspace(-1.0, 1.0, W, device=F_decoder_final.device, dtype=F_decoder_final.dtype)
         y_coords = torch.linspace(-1.0, 1.0, H, device=F_decoder_final.device, dtype=F_decoder_final.dtype)
         
@@ -1015,24 +913,98 @@ class BoundaryRefinementHead(nn.Module):
         # offsets (B, 2, H, W) -> offsets_permuted (B, H, W, 2)
         offsets_permuted = offsets.permute(0, 2, 3, 1)
         
-        # [不确定点 3]: 偏移量尺度。
-        # 我们假设预测的偏移量是*相对*于归一化网格的 (-1, 1) 范围。
-        # (例如, 偏移量 0.1 约等于 H/20 或 W/20 像素)。
+        # 偏移量尺度
         final_grid = base_grid + offsets_permuted
         
         # 4. 使用 LIF (F.grid_sample) 重采样特征图 
         F_refined = F.grid_sample(
             F_decoder_final, 
             final_grid, 
-            mode='bilinear',          # 双线性插值
-            padding_mode='border',    # 使用边缘值进行填充
-            align_corners=False       # 推荐设置为 False
+            mode='bilinear',          
+            padding_mode='border',    
+            align_corners=False      
         )
-        
-        # F_refined 现在是具有更清晰边界的特征图，
-        # 准备好被送入最终的 1x1 卷积分类器。
-        
+      
         # 改动2：残差连接，增强特征稳定性
         F_refined = F_refined + 0.1 * F_decoder_final
         
         return F_refined
+    
+class WaveletLoss(nn.Module):
+
+    def __init__(self):
+        super(WaveletLoss, self).__init__()
+        self.dwt = DWT()
+        self.l1_loss = nn.L1Loss()
+    # def forward(self, pred_prob, target_mask):
+    #     # 1. 输入检查 (Input Check)
+    #     if torch.isnan(pred_prob).any():
+    #         raise ValueError("【严重错误】WaveletLoss 检测到 pred_prob 输入包含 NaN！请检查网络输出或 Sigmoid 前的值。")
+        
+    #     if torch.isnan(target_mask).any():
+    #         # 这是一个非常常见的情况：Label 中可能有 NaN
+    #         print("【警告】WaveletLoss 检测到 target_mask 包含 NaN，正在尝试修复...")
+    #         target_mask = torch.nan_to_num(target_mask, nan=0.0)
+
+    #     # 2. 格式对齐
+    #     if pred_prob.shape[1] == 2:
+    #         pred_change = pred_prob[:, 1:2, :, :]
+    #         target_change = target_mask[:, 1:2, :, :]
+    #     else:
+    #         pred_change = pred_prob
+    #         target_change = target_mask
+        
+    #     # 3. 检查 target_mask 的数值范围 (Value Range Check)
+    #     # 如果标签里有 255 (通常是 ignore_index)，计算 L1 Loss 会导致数值巨大，虽不至于 NaN 但会影响梯度
+    #     if target_change.max() > 1.0:
+    #          # 假设你只想要 0 和 1，如果出现 255，将其设为 0
+    #         target_change[target_change > 1] = 0.0
+
+    #     # 4. DWT 变换与检查
+    #     try:
+    #         _, pred_hfs = self.dwt(pred_change)
+    #         _, target_hfs = self.dwt(target_change)
+    #     except Exception as e:
+    #         print(f"【报错】DWT 模块内部出错: {e}")
+    #         # 打印输入形状，帮你看是不是尺寸太小了
+    #         print(f"输入形状: {pred_change.shape}")
+    #         raise e
+
+    #     # 5. 输出检查 (Output Check)
+    #     if torch.isnan(pred_hfs).any():
+    #         raise ValueError("【严重错误】pred_hfs 计算结果包含 NaN！这说明 DWT 模块内部产生了 NaN。")
+    #     if torch.isnan(target_hfs).any():
+    #         raise ValueError("【严重错误】target_hfs 计算结果包含 NaN！这说明 DWT 处理 Ground Truth 时出错了。")
+
+    #     # 6. 计算损失
+    #     loss = self.l1_loss(pred_hfs, target_hfs)
+        
+    #     return loss
+    def forward(self, pred_prob, target_mask):
+        # 1. 提取变化通道
+        if pred_prob.shape[1] == 2:
+            pred_change = pred_prob[:, 1:2, :, :]
+        else:
+            pred_change = pred_prob
+            
+        if target_mask.shape[1] == 2:
+            target_change = target_mask[:, 1:2, :, :]
+        else:
+            # 如果真值只有1个通道，直接使用，不需要切片
+            target_change = target_mask   
+
+        # 2. 【关键修复】清理 target_mask 中的 NaN，防止传播
+        if torch.isnan(target_change).any():
+             target_change = torch.nan_to_num(target_change, nan=0.0)
+
+        # 3. DWT 变换
+        _, pred_hfs = self.dwt(pred_change)
+        _, target_hfs = self.dwt(target_change)
+        
+        # 4. 【关键修复】防止空张量导致的 NaN (0/0)
+        if pred_hfs.numel() == 0:
+            return torch.tensor(0.0, device=pred_prob.device, requires_grad=True)
+
+        loss = self.l1_loss(pred_hfs, target_hfs)
+        
+        return loss

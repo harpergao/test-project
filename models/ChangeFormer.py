@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from functools import partial
 from models.ChangeFormerBaseNetworks import *
 from models.help_funcs import TwoLayerConv2d, save_to_mat
-from models.help_funcs import SpatiotemporalAttentionFull
+from models.help_funcs import SpatiotemporalAttentionFull, HINet_Module, FAFF, CAGM, BoundaryRefinementHead
 import torch.nn.functional as F
 
 import timm
@@ -247,6 +247,59 @@ class OverlapPatchEmbed(nn.Module):
         x = self.proj(x)
         _, _, H, W = x.shape
         # # flatten 从 (B, embed_dim, H_out, W_out) 转换为 (B, embed_dim, H_out * W_out) 
+        # and transpose 形状变为 (B, H_out * W_out, embed_dim)
+        x = x.flatten(2).transpose(1, 2) 
+        x = self.norm(x)
+
+        return x, H, W
+
+class OverlapPatchEmbed2(nn.Module):
+    """ Image to Patch Embedding
+    """
+
+    def __init__(self, img_size=224, patch_size=7, stride=4, in_chans=3, embed_dim=768):
+        super().__init__()
+        img_size = to_2tuple(img_size)
+        patch_size = to_2tuple(patch_size)
+
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.H, self.W = img_size[0] // patch_size[0], img_size[1] // patch_size[1]
+        self.num_patches = self.H * self.W
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=stride,
+                              padding=(patch_size[0] // 2, patch_size[1] // 2))
+        self.hinet = HINet_Module(in_channels=embed_dim)
+        self.norm = nn.LayerNorm(embed_dim)
+
+        self.apply(self._init_weights)
+        
+    # 避免使用PyTorch 默认初始化策略，以增强模型稳定性
+    def _init_weights(self, m):
+        
+        # 对所有 nn.Linear 层的 weight 使用截断正态分布
+        # trunc_normal_ 通常是从 timm 或自定义的工具函数中来的，确保不会采样到离均值太远的值， Transformer 中常见做法
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        # 对所有 nn.LayerNorm 层的 bias 初始化为 0，weight 初始化为 1        
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        # 对所有 nn.Conv2d 层的权重进行正态分布初始化，标准差为 sqrt(2.0 / fan_out)，（ He 初始化，又称 Kaiming 初始化）
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def forward(self, x):
+        # pdb.set_trace()
+        x = self.proj(x)
+        x = self.hinet(x)
+        _, _, H, W = x.shape
+        # flatten 从 (B, embed_dim, H_out, W_out) 转换为 (B, embed_dim, H_out * W_out) 
         # and transpose 形状变为 (B, H_out * W_out, embed_dim)
         x = x.flatten(2).transpose(1, 2) 
         x = self.norm(x)
@@ -1947,6 +2000,280 @@ class ChangeFormerV6(nn.Module):
 
         # exit()
         return cp
+class EncoderTransformer_v5(nn.Module):
+    def __init__(self, img_size=256, patch_size=3, in_chans=3, num_classes=2, embed_dims=[32, 64, 128, 256],
+                 num_heads=[2, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=True, qk_scale=None, drop_rate=0.,
+                 attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
+                 depths=[3, 3, 6, 18], sr_ratios=[8, 4, 2, 1]):
+        super().__init__()
+        self.num_classes    = num_classes
+        self.depths         = depths
+        self.embed_dims     = embed_dims
+
+        # patch embedding definitions
+        self.patch_embed1 = OverlapPatchEmbed2(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
+                                              embed_dim=embed_dims[0])
+        self.patch_embed2 = OverlapPatchEmbed2(img_size=img_size // 4, patch_size=patch_size, stride=2, in_chans=embed_dims[0],
+                                              embed_dim=embed_dims[1])
+        self.patch_embed3 = OverlapPatchEmbed2(img_size=img_size // 8, patch_size=patch_size, stride=2, in_chans=embed_dims[1],
+                                              embed_dim=embed_dims[2])
+        self.patch_embed4 = OverlapPatchEmbed2(img_size=img_size // 16, patch_size=patch_size, stride=2, in_chans=embed_dims[2],
+                                              embed_dim=embed_dims[3])
+        
+        # # 放在了OverlapPatchEmbed2里边，为了正常展平和LayerNorm
+        # self.hinet1 = HINet_Module(in_channels=embed_dims[0])
+        # self.hinet2 = HINet_Module(in_channels=embed_dims[1])
+        # self.hinet3 = HINet_Module(in_channels=embed_dims[2])
+        # self.hinet4 = HINet_Module(in_channels=embed_dims[3])
+        
+        # Stage-1 (x1/4 scale)
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
+        cur = 0
+        self.block1 = nn.ModuleList([Block(
+            dim=embed_dims[0], num_heads=num_heads[0], mlp_ratio=mlp_ratios[0], qkv_bias=qkv_bias, qk_scale=qk_scale,
+            drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
+            sr_ratio=sr_ratios[0])
+            for i in range(depths[0])])
+        self.norm1 = norm_layer(embed_dims[0])
+        
+        # Stage-2 (x1/8 scale)
+        cur += depths[0]
+        self.block2 = nn.ModuleList([Block(
+            dim=embed_dims[1], num_heads=num_heads[1], mlp_ratio=mlp_ratios[1], qkv_bias=qkv_bias, qk_scale=qk_scale,
+            drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
+            sr_ratio=sr_ratios[1])
+            for i in range(depths[1])])
+        self.norm2 = norm_layer(embed_dims[1])
+       
+       # Stage-3 (x1/16 scale)
+        cur += depths[1]
+        self.block3 = nn.ModuleList([Block(
+            dim=embed_dims[2], num_heads=num_heads[2], mlp_ratio=mlp_ratios[2], qkv_bias=qkv_bias, qk_scale=qk_scale,
+            drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
+            sr_ratio=sr_ratios[2])
+            for i in range(depths[2])])
+        self.norm3 = norm_layer(embed_dims[2])
+        
+        # Stage-4 (x1/32 scale)
+        cur += depths[2]
+        self.block4 = nn.ModuleList([Block(
+            dim=embed_dims[3], num_heads=num_heads[3], mlp_ratio=mlp_ratios[3], qkv_bias=qkv_bias, qk_scale=qk_scale,
+            drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[cur + i], norm_layer=norm_layer,
+            sr_ratio=sr_ratios[3])
+            for i in range(depths[3])])
+        self.norm4 = norm_layer(embed_dims[3])
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+    def reset_drop_path(self, drop_path_rate):
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(self.depths))]
+        cur = 0
+        for i in range(self.depths[0]):
+            self.block1[i].drop_path.drop_prob = dpr[cur + i]
+
+        cur += self.depths[0]
+        for i in range(self.depths[1]):
+            self.block2[i].drop_path.drop_prob = dpr[cur + i]
+
+        cur += self.depths[1]
+        for i in range(self.depths[2]):
+            self.block3[i].drop_path.drop_prob = dpr[cur + i]
+
+        cur += self.depths[2]
+        for i in range(self.depths[3]):
+            self.block4[i].drop_path.drop_prob = dpr[cur + i]
+
+    def forward_features(self, x):
+        B = x.shape[0]
+        outs = []
+    
+        # stage 1
+        x1, H1, W1 = self.patch_embed1(x)
+        for i, blk in enumerate(self.block1):
+            x1 = blk(x1, H1, W1)
+        x1 = self.norm1(x1)
+        x1 = x1.reshape(B, H1, W1, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x1)
+
+        # stage 2
+        x1, H1, W1 = self.patch_embed2(x1)
+        for i, blk in enumerate(self.block2):
+            x1 = blk(x1, H1, W1)
+        x1 = self.norm2(x1)
+        x1 = x1.reshape(B, H1, W1, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x1)
+
+        # stage 3
+        x1, H1, W1 = self.patch_embed3(x1)
+        for i, blk in enumerate(self.block3):
+            x1 = blk(x1, H1, W1)
+        x1 = self.norm3(x1)
+        x1 = x1.reshape(B, H1, W1, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x1)
+
+        # stage 4
+        x1, H1, W1 = self.patch_embed4(x1)
+        for i, blk in enumerate(self.block4):
+            x1 = blk(x1, H1, W1)
+        x1 = self.norm4(x1)
+        x1 = x1.reshape(B, H1, W1, -1).permute(0, 3, 1, 2).contiguous()
+        outs.append(x1)
+        return outs
+
+    def forward(self, x):
+        x = self.forward_features(x)
+        return x
+
+class DecoderBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        
+        # 1. 先用 1x1 卷积把拼接后的通道数降下来 (降维/融合)
+        # 这一步不放在残差路径里，是为了减少后续 3x3 卷积的计算量
+        self.reduce_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+        # 2. 标准的残差块 (输入输出通道数相同)
+        # 这样残差路径就是一个纯粹的 identity mapping，不需要 1x1 投影，梯度更顺畅
+        self.conv1 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+    def forward(self, x):
+        x = self.reduce_conv(x)
+        
+        residual = x
+        
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out += residual
+        out = self.relu(out)
+        
+        return out
+
+
+class DecoderTransformer_v5(nn.Module):
+    def __init__(self, in_channels = [32, 64, 128, 256], output_nc=2):
+        super().__init__()
+        
+        self.in_channels     = in_channels
+        self.output_nc       = output_nc
+        c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
+        
+        self.faff4 = FAFF(in_channels=c4_in_channels)
+        self.faff3 = FAFF(in_channels=c3_in_channels)
+        self.faff2 = FAFF(in_channels=c2_in_channels)
+        self.faff1 = FAFF(in_channels=c1_in_channels)
+        
+        self.cagm4 = CAGM(in_channel=c4_in_channels, out_channels=c4_in_channels)
+        self.cagm3 = CAGM(in_channel=c3_in_channels, out_channels=c3_in_channels)
+        self.cagm2 = CAGM(in_channel=c2_in_channels, out_channels=c2_in_channels)
+        self.cagm1 = CAGM(in_channel=c1_in_channels, out_channels=c1_in_channels)
+        
+        self.d3 = DecoderBlock(in_channels=c4_in_channels + c3_in_channels, out_channels=c3_in_channels)
+        self.d2 = DecoderBlock(in_channels=c3_in_channels + c2_in_channels, out_channels=c2_in_channels)
+        self.d1 = DecoderBlock(in_channels=c2_in_channels + c1_in_channels, out_channels=c1_in_channels)
+        
+        self.make_pred_c4 = make_prediction(in_channels=c4_in_channels, out_channels=self.output_nc)
+        self.make_pred_c3 = make_prediction(in_channels=c3_in_channels, out_channels=self.output_nc)
+        self.make_pred_c2 = make_prediction(in_channels=c2_in_channels, out_channels=self.output_nc)
+        self.make_pred_c1 = make_prediction(in_channels=c1_in_channels, out_channels=self.output_nc)
+        
+        self.BRH = BoundaryRefinementHead(in_channels=c1_in_channels, max_offset_scale=0.05)
+        self.BRH_final = BoundaryRefinementHead(in_channels=c1_in_channels, max_offset_scale=0.01)
+        self.dense1 = nn.Sequential(
+            nn.Conv2d(c1_in_channels, c1_in_channels * 4, kernel_size=3, padding=1),
+            nn.PixelShuffle(2),   # x2
+            nn.Conv2d(c1_in_channels, c1_in_channels * 4, kernel_size=3, padding=1),
+            nn.PixelShuffle(2),   # x2 再 x2 = 4× 总放大
+        )
+        self.smoother = nn.Sequential(
+            nn.Conv2d(c1_in_channels, c1_in_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(c1_in_channels, c1_in_channels, kernel_size=3, padding=1),
+        )
+        self.logits = nn.Conv2d(c1_in_channels, output_nc, kernel_size=1)
+        
+    def forward(self, x1, x2):
+        c1_1, c2_1, c3_1, c4_1 = x1
+        c1_2, c2_2, c3_2, c4_2 = x2
+        outputs = []
+        
+        # Stage 4: x1/32 scale
+        x4_c = self.faff4(c4_1, c4_2)
+        c4_spatial = c4_1 - c4_2
+        x4_f = self.cagm4(c4_spatial, x4_c)
+        x4_p = self.make_pred_c4(x4_f)
+        outputs.append(x4_p)
+        x4_up = F.interpolate(x4_f, scale_factor=2, mode="bilinear", align_corners=False)
+        
+        # Stage 3: x1/16 scale
+        x3_c = self.faff3(c3_1, c3_2)
+        c3_spatial = c3_1 - c3_2
+        x3_f = self.cagm3(c3_spatial, x3_c)
+        x3_cat = torch.cat((x4_up, x3_f), dim=1)
+        x3 = self.d3(x3_cat)
+        x3_p = self.make_pred_c3(x3)
+        outputs.append(x3_p)
+        x3_up = F.interpolate(x3, scale_factor=2, mode="bilinear", align_corners=False)
+        
+        # Stage 2: x1/8 scale
+        x2_c = self.faff2(c2_1, c2_2)
+        c2_spatial = c2_1 - c2_2
+        x2_f = self.cagm2(c2_spatial, x2_c)
+        x2_cat = torch.cat((x3_up, x2_f), dim=1)
+        x2 = self.d2(x2_cat)
+        x2_p = self.make_pred_c2(x2)
+        outputs.append(x2_p)
+        x2_up = F.interpolate(x2, scale_factor=2, mode="bilinear", align_corners=False)
+        
+        # Stage 1: x1/4 scale
+        x1_c = self.faff1(c1_1, c1_2)
+        c1_spatial = c1_1 - c1_2
+        x1_f = self.cagm1(c1_spatial, x1_c)
+        x1_cat = torch.cat((x2_up, x1_f), dim=1)
+        x1 = self.d1(x1_cat)
+        x1_p = self.make_pred_c1(x1)
+        outputs.append(x1_p)
+        
+        # Final prediction
+        x = self.BRH(x1)
+        x = self.dense1(x)
+        x = self.smoother(x)
+        x = self.BRH_final(x)
+        x = self.logits(x)
+        
+        outputs.append(x)
+        return outputs
+        
+        
+        
     
 class FFormer(nn.Module):
     def __init__(self, input_nc=3, output_nc=2, decoder_softmax=False, embed_dim=256):
@@ -1957,9 +2284,21 @@ class FFormer(nn.Module):
         self.embedding_dim = embed_dim
         self.drop_rate = 0.1
         self.attn_drop = 0.1
-        self.drop_path_rate = 0.1 
+        self.drop_path_rate = 0.2 
 
-        self.Tenc_x2    = EncoderTransformer_v3(img_size=256, patch_size = 7, in_chans=input_nc, num_classes=output_nc, embed_dims=self.embed_dims,
+        self.Tenc_x2    = EncoderTransformer_v5(img_size=256, patch_size = 7, in_chans=input_nc, num_classes=output_nc, embed_dims=self.embed_dims,
                     num_heads = [1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=True, qk_scale=None, drop_rate=self.drop_rate,
                     attn_drop_rate = self.attn_drop, drop_path_rate=self.drop_path_rate, norm_layer=partial(nn.LayerNorm, eps=1e-6),
                     depths=self.depths, sr_ratios=[8, 4, 2, 1])
+        
+        self.Dec_vf = DecoderTransformer_v5(in_channels = self.embed_dims, output_nc=2)
+        
+    def forward(self, x1, x2):
+        
+        [fx1, fx2] = [self.Tenc_x2(x1), self.Tenc_x2(x2)]
+        
+        cp = self.Dec_vf(fx1, fx2)
+        
+        return cp
+        
+        

@@ -7,8 +7,8 @@ from misc.metric_tool import ConfuseMatrixMeter
 from misc.logger_tool import Logger
 from utils import de_norm
 import utils
-
-
+# for softmax
+import torch.nn.functional as F  
 # Decide which device we want to run on
 # torch.cuda.current_device()
 
@@ -70,7 +70,7 @@ class CDEvaluator():
         if os.path.exists(os.path.join(self.checkpoint_dir, checkpoint_name)):
             self.logger.write('loading last checkpoint...\n')
             # load the entire checkpoint
-            checkpoint = torch.load(os.path.join(self.checkpoint_dir, checkpoint_name), map_location=self.device)
+            checkpoint = torch.load(os.path.join(self.checkpoint_dir, checkpoint_name), map_location=self.device, weights_only=False)
 
             self.net_G.load_state_dict(checkpoint['model_G_state_dict'], strict=False)
 
@@ -151,12 +151,74 @@ class CDEvaluator():
 
     def _clear_cache(self):
         self.running_metric.clear()
+# ==============================================================
+    #  修改点：新增 TTA 预测核心函数
+    # ==============================================================
+    def _predict_with_tta(self, img1, img2):
+        """
+        执行 TTA 策略：原图 + 水平翻 + 垂直翻 + 旋转90 (共4图投票)
+        """
+        self.net_G.eval()
+        preds = []
 
+        # --- 1. 原图预测 ---
+        out = self.net_G(img1, img2)[-1] # 注意保留你的 [-1] 取最后一个输出
+        prob = F.softmax(out, dim=1)     # 转成概率分布
+        preds.append(prob)
+
+        # --- 2. 水平翻转 (Horizontal Flip) ---
+        # 变换输入
+        img1_h = torch.flip(img1, dims=[3]) 
+        img2_h = torch.flip(img2, dims=[3])
+        
+        out_h = self.net_G(img1_h, img2_h)[-1]
+        prob_h = F.softmax(out_h, dim=1)
+        
+        # 变换回原方向
+        preds.append(torch.flip(prob_h, dims=[3]))
+
+        # --- 3. 垂直翻转 (Vertical Flip) ---
+        img1_v = torch.flip(img1, dims=[2])
+        img2_v = torch.flip(img2, dims=[2])
+        
+        out_v = self.net_G(img1_v, img2_v)[-1]
+        prob_v = F.softmax(out_v, dim=1)
+        
+        preds.append(torch.flip(prob_v, dims=[2]))
+
+        # --- 4. 旋转 90度 (Rotate 90) ---
+        # dim=[2,3] 是 H,W 维度
+        img1_r = torch.rot90(img1, k=1, dims=[2, 3])
+        img2_r = torch.rot90(img2, k=1, dims=[2, 3])
+        
+        out_r = self.net_G(img1_r, img2_r)[-1]
+        prob_r = F.softmax(out_r, dim=1)
+        
+        # 逆时针转回去 (k=-1)
+        preds.append(torch.rot90(prob_r, k=-1, dims=[2, 3]))
+
+        # --- 5. 求平均 ---
+        # stack 起来取 mean
+        final_prob = torch.stack(preds).mean(dim=0)
+        return final_prob
+
+    # ==============================================================
+    #  修改点：替换原有的 _forward_pass
+    # ==============================================================
     def _forward_pass(self, batch):
         self.batch = batch
         img_in1 = batch['A'].to(self.device)
         img_in2 = batch['B'].to(self.device)
-        self.G_pred = self.net_G(img_in1, img_in2)[-1]
+        
+        # 原代码: self.G_pred = self.net_G(img_in1, img_in2)[-1]
+        
+        # 新代码: 使用 TTA
+        self.G_pred = self._predict_with_tta(img_in1, img_in2)
+    # def _forward_pass(self, batch):
+    #     self.batch = batch
+    #     img_in1 = batch['A'].to(self.device)
+    #     img_in2 = batch['B'].to(self.device)
+    #     self.G_pred = self.net_G(img_in1, img_in2)[-1]
 
     def eval_models(self,checkpoint_name='best_ckpt.pt'):
 

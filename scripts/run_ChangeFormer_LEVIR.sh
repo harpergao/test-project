@@ -5,23 +5,23 @@
 export CUDA_VISIBLE_DEVICES=0,1
 
 #Set paths
-checkpoint_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint3/changeformerV6_freq
-vis_root=/mnt/data1/gyf/code/newtest/ChangeFormer/vis3/changeformerV6_freq      #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint3/freq8
+vis_root=/mnt/data1/gyf/code/newtest/ChangeFormer/vis3/freq8      #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
 data_name=LEVIR
 
 
 img_size=256    # 256x256 pixels.
 batch_size=16   # The model will process 16 pairs of images at once during each training step.
 lr=0.0002        #!!!BEFORE 0.0001 !!! The learning rate for the optimizer, which controls how much to change the model in response to the estimated error each time the model weights are updated.             
-max_epochs=201
+max_epochs=300
 embed_dim=256
 
-net_G=ChangeFormerV6       #ChangeFormerV6 is the finalized verion
+net_G=FreqFormer       #ChangeFormerV6 is the finalized verion
                             # The G likely stands for "Generator.
 
 lr_policy=linear
 optimizer=adamw                 #Choices: sgd (set lr to 0.01), adam, adamw
-loss=ce                         #Choices: ce, fl (Focal Loss), miou
+loss=ce                        #Choices: ce, fl (Focal Loss), miou
 multi_scale_train=True
 multi_scale_infer=False
 shuffle_AB=False
