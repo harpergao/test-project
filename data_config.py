@@ -7,14 +7,17 @@ class DataConfig:
         self.data_name = data_name
         if data_name == 'LEVIR':
             self.label_transform = "norm"
-            self.root_dir = '/mnt/data1/gyf/code/newtest/LEVIR-CD256/'
+            self.root_dir = '/mnt/data1/gyf/dataset/LEVIR-CD256/'
         elif data_name == 'DSIFN':
             self.label_transform = "norm"
-            self.root_dir = '/mnt/data1/gyf/code/newtest/LEVIR-CD256/'
+            self.root_dir = '/mnt/data1/gyf/dataset/LEVIR-CD256/'
             #self.root_dir = '/media/lidan/ssd2/CDData/DSIFN_256/'
         elif data_name == 'WHU':
             self.label_transform = "norm"
-            self.root_dir = '/media/lidan/ssd2/CDData/WHU-CD-256/'
+            self.root_dir = '/mnt/data1/gyf/dataset/WHU-CD-256/'
+        elif data_name == 'SYSU':
+            self.label_transform = "norm"
+            self.root_dir = '/mnt/data1/gyf/dataset/SYSU-CD-flatten/'
         elif data_name == 'CDD':
             self.label_transform = "norm"
             self.root_dir = '/media/lidan/ssd2/CDData/CDD-CD-256/'

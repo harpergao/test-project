@@ -20,7 +20,10 @@ class CDEvaluator():
     def __init__(self, args, dataloader):
 
         self.dataloader = dataloader
-
+        self.target_names = {
+            'xxx',
+            'yyy',
+        }
         self.n_class = args.n_class
         # define G
         # self.net_G = define_G(args=args, gpu_ids=args.gpu_ids)
@@ -122,12 +125,58 @@ class CDEvaluator():
 
             vis_pred = utils.make_numpy_grid(self._visualize_pred())
 
-            vis_gt = utils.make_numpy_grid(self.batch['L'])
+            raw_gt = self.batch['L']
+            if raw_gt.max() <= 1:
+                vis_gt_data = raw_gt * 255
+            else:
+                vis_gt_data = raw_gt
+            vis_gt = utils.make_numpy_grid(vis_gt_data)
+            
             vis = np.concatenate([vis_input, vis_input2, vis_pred, vis_gt], axis=0)
             vis = np.clip(vis, a_min=0.0, a_max=1.0)
             file_name = os.path.join(
                 self.vis_dir, 'eval_' + str(self.batch_id)+'.jpg')
             plt.imsave(file_name, vis)
+    # def _collect_running_batch_states(self):
+
+    #     running_acc = self._update_metric()
+
+    #     names = self.batch['name']   # List[str], len = batch_size
+
+    #     for i, name in enumerate(names):
+    #         if name not in self.target_names:
+    #             continue
+
+    #         # -------- A / B --------
+    #         vis_A = utils.make_numpy_grid(
+    #             de_norm(self.batch['A'][i:i+1])
+    #         )
+    #         vis_B = utils.make_numpy_grid(
+    #             de_norm(self.batch['B'][i:i+1])
+    #         )
+
+    #         # -------- pred --------
+    #         pred = torch.argmax(self.G_pred[i:i+1], dim=1, keepdim=True)
+    #         vis_pred = utils.make_numpy_grid(pred * 255)
+
+    #         # -------- GT --------
+    #         gt = self.batch['L'][i:i+1]
+    #         if gt.max() <= 1:
+    #             gt = gt * 255
+    #         vis_gt = utils.make_numpy_grid(gt)
+
+    #         # -------- 拼图 --------
+    #         vis = np.concatenate(
+    #             [vis_A, vis_B, vis_pred, vis_gt],
+    #             axis=0
+    #         )
+    #         vis = np.clip(vis, 0.0, 1.0)
+
+    #         save_path = os.path.join(self.vis_dir, f'{name}_vis.jpg')
+    #         plt.imsave(save_path, vis)
+
+    #         self.logger.write(f'Saved visualization for {name}\n')
+
 
 
     def _collect_epoch_states(self):
@@ -151,9 +200,7 @@ class CDEvaluator():
 
     def _clear_cache(self):
         self.running_metric.clear()
-# ==============================================================
-    #  修改点：新增 TTA 预测核心函数
-    # ==============================================================
+
     def _predict_with_tta(self, img1, img2):
         """
         执行 TTA 策略：原图 + 水平翻 + 垂直翻 + 旋转90 (共4图投票)
@@ -202,23 +249,17 @@ class CDEvaluator():
         final_prob = torch.stack(preds).mean(dim=0)
         return final_prob
 
-    # ==============================================================
-    #  修改点：替换原有的 _forward_pass
-    # ==============================================================
     def _forward_pass(self, batch):
         self.batch = batch
         img_in1 = batch['A'].to(self.device)
         img_in2 = batch['B'].to(self.device)
         
-        # 原代码: self.G_pred = self.net_G(img_in1, img_in2)[-1]
+        # 原代码: 
+        # self.G_pred = self.net_G(img_in1, img_in2)[-1]
         
         # 新代码: 使用 TTA
         self.G_pred = self._predict_with_tta(img_in1, img_in2)
-    # def _forward_pass(self, batch):
-    #     self.batch = batch
-    #     img_in1 = batch['A'].to(self.device)
-    #     img_in2 = batch['B'].to(self.device)
-    #     self.G_pred = self.net_G(img_in1, img_in2)[-1]
+
 
     def eval_models(self,checkpoint_name='best_ckpt.pt'):
 

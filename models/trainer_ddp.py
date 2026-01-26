@@ -270,12 +270,21 @@ class CDTrainer():
 
     def _collect_epoch_states(self):
         # (Similar to batch states, these scores are per-process.
+        cm_local = self.running_metric.sum        
+        # local_pixels = cm_local.sum()
+        # print(f"[Rank {self.rank}] Local pixels sum: {local_pixels}")
+        cm_tensor = torch.from_numpy(cm_local).long().to(self.device)
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(cm_tensor, op=dist.ReduceOp.SUM)
+        self.running_metric.sum = cm_tensor.cpu().numpy()
         # For precise evaluation, you'd need to gather results before calculating.)
         scores = self.running_metric.get_scores()
         self.epoch_acc = scores['mf1']
 
         # DDP --- MODIFIED: Only rank 0 should log
         if self.rank == 0:
+            # global_pixels = self.running_metric.sum.sum()
+            # print(f"[Rank 0] Global pixels sum (After Reduce): {global_pixels}")
             self.logger.write('Is_training: %s. Epoch %d / %d, epoch_mF1= %.5f\n' %
                   (self.is_training, self.epoch_id, self.max_num_epochs-1, self.epoch_acc))
             message = ''
@@ -366,15 +375,17 @@ class CDTrainer():
 
             for pred in self.G_pred:
                 if pred.size(2) != gt.size(2):
-                    temp_loss1 = self.weights[i] * (
-                        self._pxl_loss(pred, F.interpolate(gt, size=pred.size(2), mode="nearest")) +
-                        0.1 * self.dice_loss(pred, F.interpolate(gt, size=pred.size(2), mode="nearest"))
-                    )
+                    temp_loss1 = self.weights[i] * self._pxl_loss(pred, F.interpolate(gt, size=pred.size(2), mode="nearest"))
+                    # temp_loss1 = self.weights[i] * (
+                    #     self._pxl_loss(pred, F.interpolate(gt, size=pred.size(2), mode="nearest")) +
+                    #     0.1 * self.dice_loss(pred, F.interpolate(gt, size=pred.size(2), mode="nearest"))
+                    # )
                 else:
-                    temp_loss1 = self.weights[i] * (
-                        self._pxl_loss(pred, gt) +
-                        0.1 * self.dice_loss(pred, gt)
-                    )
+                    temp_loss1 = self.weights[i] * self._pxl_loss(pred, gt) 
+                    # temp_loss1 = self.weights[i] * (
+                    #     self._pxl_loss(pred, gt) +
+                    #     0.1 * self.dice_loss(pred, gt)
+                    # )
 
                 # self.part_loss[i] = temp_loss1.item()
                 temp_loss += temp_loss1
@@ -384,66 +395,16 @@ class CDTrainer():
             self.loss1 = temp_loss
 
         else:
-            self.loss1 = (
-                self._pxl_loss(self.G_pred[-1], gt)
-                + 0.1 * self.dice_loss(self.G_pred[-1], gt)
-            )
+            self.loss1 = self._pxl_loss(self.G_pred[-1], gt)
+            # self.loss1 = (
+            #     self._pxl_loss(self.G_pred[-1], gt)
+            #     + 0.1 * self.dice_loss(self.G_pred[-1], gt)
+            # )
 
         self.wave_loss = self.waveLoss(self.G_pred[-1], gt)
-        self.G_loss = self.loss1 + 0.1 * self.wave_loss
+        self.G_loss = self.loss1 + 0.1 *self.wave_loss
 
         self.G_loss.backward()
-
-    # def _backward_G(self):
-    #     # 1. 获取 GT 并转为 float，维度通常为 [B, H, W]
-    #     gt = self.batch['L'].to(self.device).float()
-        
-    #     if self.multi_scale_train == "True":
-    #         i = 0
-    #         temp_loss = 0.0
-    #         for pred in self.G_pred:
-    #             # pred 维度: [B, 2, H_p, W_p]
-    #             # gt   维度: [B, H, W]
-                
-    #             # --- 修复开始：严谨的尺寸对齐逻辑 ---
-    #             if pred.shape[2:] != gt.shape[1:]: # 比较 (H_p, W_p) 和 (H, W)
-    #                 # 必须先 unsqueeze 增加通道维度 [B, 1, H, W] 才能正确插值
-    #                 gt_resized = F.interpolate(
-    #                     gt,
-    #                     size=pred.shape[2:],  # 使用 shape[2:] 自动获取 (H_p, W_p)
-    #                     mode="nearest"
-    #                 )# 插值完变回 [B, H_p, W_p]
-    #             else:
-    #                 gt_resized = gt
-    #             # --- 修复结束 ---
-
-    #             # 计算 Loss
-    #             temp_loss1 = self.weights[i] * (self._pxl_loss(pred, gt_resized) + self.dice_loss(pred, gt_resized))
-    #             temp_loss += temp_loss1
-    #             i += 1
-            
-    #         self.loss1 = temp_loss
-            
-    #     else:
-    #         # 单尺度训练也需要同样的保护逻辑
-    #         pred = self.G_pred[-1]
-    #         if pred.shape[2:] != gt.shape[1:]:
-    #             gt_resized = F.interpolate(
-    #                 gt.unsqueeze(1), 
-    #                 size=pred.shape[2:], 
-    #                 mode="nearest"
-    #             ).squeeze(1)
-    #         else:
-    #             gt_resized = gt
-                
-    #         self.loss1 = self._pxl_loss(pred, gt_resized) + self.dice_loss(pred, gt_resized)
-
-    #     # wave_loss 通常是在原图尺度计算，这里假设 G_pred[-1] 是原图尺寸，如果不是也需要 resize
-    #     # 如果 waveLoss 内部处理了 resize 则无需修改，否则参考上面
-    #     self.wave_loss = self.waveLoss(self.G_pred[-1], gt)
-        
-    #     self.G_loss = self.loss1 + 0.1 * self.wave_loss
-    #     self.G_loss.backward()
 
     def train_models(self):
         self._load_checkpoint()
@@ -497,8 +458,8 @@ class CDTrainer():
             self._update_checkpoints()
             
             # ----------------- [TENSORBOARD ADDED 4/4] 显式关闭 -----------------
-            if self.rank == 0:
-                self.writer.close()
+        if self.rank == 0:
+            self.writer.close()
             
 
 

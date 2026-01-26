@@ -5,8 +5,10 @@
 export CUDA_VISIBLE_DEVICES=0,1
 
 #Set paths
-checkpoint_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint3/freq8
-vis_root=/mnt/data1/gyf/code/newtest/ChangeFormer/vis3/freq8      #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+checkpoint_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint3/LEVIR_BIT
+vis_root=/mnt/data1/gyf/code/newtest/ChangeFormer/vis5/LEVIR_BIT  #Sets the root directory where visual outputs, like images of the detected changes, will be saved.
+# data_name=WHU
+# data_name=SYSU
 data_name=LEVIR
 
 
@@ -16,8 +18,13 @@ lr=0.0002        #!!!BEFORE 0.0001 !!! The learning rate for the optimizer, whic
 max_epochs=300
 embed_dim=256
 
-net_G=FreqFormer       #ChangeFormerV6 is the finalized verion
-                            # The G likely stands for "Generator.
+# net_G=FreqFormer       #ChangeFormerV6 is the finalized verion
+net_G=base_transformer_pos_s4_dd8
+# net_G=ChangeFormerV6
+# net_G=SiamUnet_conc
+# net_G=Unet
+# net_G=ELGCNet
+                            # The G likely stands for "Generator".
 
 lr_policy=linear
 optimizer=adamw                 #Choices: sgd (set lr to 0.01), adam, adamw
@@ -32,7 +39,7 @@ shuffle_AB=False
 # pretrain=/data/gyf/newtest/ChangeFormer/checkpoint1/CD_ChangeFormerV6_LEVIR_b16_lr0.0001_adamw_train_test_200_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/last_ckpt.pt
 #Train and Validation splits
 split=train         #trainval
-split_val=test      #test
+split_val=val      #test
 project_name=CD_${net_G}_${data_name}_b${batch_size}_lr${lr}_${optimizer}_${split}_${split_val}_${max_epochs}_${lr_policy}_${loss}_multi_train_${multi_scale_train}_multi_infer_${multi_scale_infer}_shuffle_AB_${shuffle_AB}_embed_dim_${embed_dim}
 
 echo "Starting DDP training on GPUs: $CUDA_VISIBLE_DEVICES"

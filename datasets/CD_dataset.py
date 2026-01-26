@@ -74,8 +74,8 @@ class ImageDataset(data.Dataset):
                 with_scale_random_crop=True,
                 with_random_blur=True,
                 random_color_tf=True,
-                with_random_noise=True,
-                with_random_cutout=True,
+                # with_random_noise=True,
+                # with_random_cutout=True,
             )
         else:
             self.augm = CDDataAugmentation(
@@ -119,7 +119,10 @@ class CDDataset(ImageDataset):
 
         #  二分类中，前景标注为255
         if self.label_transform == 'norm':
-            label = label // 255
+            if label.max() > 1:
+                label = label // 255
+            # 顺便加个保险，确保只有 0 和 1
+            label[label > 0] = 1
         
         [img, img_B], [label] = self.augm.transform([img, img_B], [label], to_tensor=self.to_tensor)
         # print(label.max())

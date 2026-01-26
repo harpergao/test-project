@@ -137,9 +137,8 @@ class CDDataAugmentation:
             imgs = [TF.rotate(img, angle) for img in imgs]
             labels = [TF.rotate(img, angle) for img in labels]
 
-        # Random Resized Crop (官方版)
-        # 修复 Bug: 只有 50% 概率触发，而不是 > 0 (100%)
-        # 注意：scale_random_crop 和 random_crop 最好互斥，或者概率叠加。这里我让它们独立判定。
+        # Random Resized Crop
+        # scale_random_crop 和 random_crop 最好互斥
         if self.with_random_crop and random.random() > 0.5:
             # scale 设为 0.5~1.0 增加难度
             i, j, h, w = transforms.RandomResizedCrop(size=self.img_size). \
@@ -148,8 +147,7 @@ class CDDataAugmentation:
             imgs = [TF.resized_crop(img, i, j, h, w, size=(self.img_size, self.img_size), interpolation=Image.BICUBIC) for img in imgs]
             labels = [TF.resized_crop(img, i, j, h, w, size=(self.img_size, self.img_size), interpolation=Image.NEAREST) for img in labels]
 
-        # Scale Random Crop (你的自定义版 - 支持 Zoom Out)
-        # 修复 Bug: 增加概率判定 > 0.5
+        # Scale Random Crop
         elif self.with_scale_random_crop and random.random() > 0.5: 
             scale_range = [1, 1.2]
             target_scale = scale_range[0] + random.random() * (scale_range[1] - scale_range[0])
@@ -160,45 +158,61 @@ class CDDataAugmentation:
             imgsize = imgs[0].size
             box = get_random_crop_box(imgsize=imgsize, cropsize=self.img_size)
             
-            # 注意：Label 填充 255 (通常是 ignore index)，这很好
+            # 注意：Label 填充 255
             imgs = [pil_crop(img, box, cropsize=self.img_size, default_value=0) for img in imgs]
             labels = [pil_crop(img, box, cropsize=self.img_size, default_value=255) for img in labels]
 
         # ---------------- 像素变换 (仅图像) ----------------
 
         # Blur
-        # 修复 Bug: 增加概率判定 > 0.8 (20%概率模糊)
         if self.with_random_blur and random.random() > 0.8:
             radius = random.uniform(0.1, 1.5)
             imgs = [img.filter(ImageFilter.GaussianBlur(radius=radius)) for img in imgs]
 
         # Color Jitter
         if self.random_color_tf and random.random() > 0.2:
-            # 稍微加强一点点对比度
             jitter = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
-            # Independent Jitter: 每张图随机变，增强鲁棒性
             imgs = [jitter(img) for img in imgs]
+        # if self.random_color_tf and random.random() < 0.8: # 80% 的总触发率
+        #     brightness = random.uniform(0.8, 1.2)
+        #     contrast = random.uniform(0.8, 1.2)
+        #     saturation = random.uniform(0.8, 1.2)
+        #     hue = random.uniform(-0.05, 0.05)
+            
+        #     # 逻辑：大部分时候(70%) T1/T2 一起变亮变暗（模拟环境光变化）
+        #     # 小部分时候(30%) T1/T2 独立乱变（模拟极端差异）
+        #     if random.random() < 0.7: 
+        #         # 同步变换 (Simultaneous)
+        #          imgs = [TF.adjust_brightness(img, brightness) for img in imgs]
+        #          imgs = [TF.adjust_contrast(img, contrast) for img in imgs]
+        #          imgs = [TF.adjust_saturation(img, saturation) for img in imgs]
+        #          imgs = [TF.adjust_hue(img, hue) for img in imgs]
+        #     else:
+        #         # 独立变换 (Independent) - 你之前的逻辑，现在只占小部分
+        #          jitter = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+        #          imgs = [jitter(img) for img in imgs]
 
-        # [新增] Gaussian Noise (使用 float 计算防止溢出白点)
+        # Gaussian Noise
         if self.with_random_noise and random.random() > 0.8:
             def add_noise(pil_img):
                 img_np = np.array(pil_img).astype(np.float32)
-                noise = np.random.normal(0, 15, img_np.shape) # 噪声强度 15
+                noise = np.random.normal(0, 15, img_np.shape)
                 img_np = img_np + noise
                 img_np = np.clip(img_np, 0, 255).astype(np.uint8)
                 return Image.fromarray(img_np)
             imgs = [add_noise(img) for img in imgs]
 
-        # [新增] Cutout (Transformer 必备)
-        if self.with_random_cutout and random.random() > 0.6: # 40% 概率触发
+        # Cutout for Transformer backbones
+        if self.with_random_cutout and random.random() > 0.6: 
             def cutout(pil_img):
                 img_np = np.array(pil_img)
                 h, w = img_np.shape[:2]
-                ratio = random.uniform(0.1, 0.2) # 遮挡 10%-20%
+                # adviced 5%-15% NEWs
+                ratio = random.uniform(0.1, 0.2) # 遮挡 
                 ch, cw = int(h*ratio), int(w*ratio)
                 y = random.randint(0, h - ch)
                 x = random.randint(0, w - cw)
-                # 填中性灰 127，比纯黑 0 对模型更友好
+                # 填充中性灰 127，比纯黑 0 对模型更友好
                 img_np[y:y+ch, x:x+cw] = 127 
                 return Image.fromarray(img_np)
             imgs = [cutout(img) for img in imgs]
@@ -282,7 +296,7 @@ class CDDataAugmentation:
 
     #         imgs = [TF.resized_crop(img, i, j, h, w,
     #                                 size=(self.img_size, self.img_size),
-    #                                 interpolation=Image.CUBIC)
+    #                                 interpolation=Image.BICUBIC)
     #                 for img in imgs]
 
     #         labels = [TF.resized_crop(img, i, j, h, w,

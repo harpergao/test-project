@@ -554,7 +554,7 @@ class _SpatiallyVariantConvolution(nn.Module):
         K = self.kernel_size
         
         # 1. 提取局部块
-        # features_unfolded: (B, C * K*K, H*W)
+        # features_unfolded: (B, C*K*K, H*W)
         features_unfolded = self.unfold(features)
         
         # 2. 重新塑形以便进行批处理乘法
@@ -723,6 +723,9 @@ class FAFF(nn.Module):
         
         # 高频滤波器 (K=3) 
         self.hfdf_filter = HFDF(in_channels=self.hf_channels, kernel_size=3)
+        # self.hfdf_filter = HFDF(in_channels=in_channels, kernel_size=3)
+        
+        # self.hi = nn.Conv2d(in_channels * 2, in_channels, kernel_size=1)
 
     def forward(self, F_T1_norm, F_T2_aligned):
         # 建议 6：在整个 FAFF 前加一个 deformable alignment（非常有效）
@@ -737,11 +740,12 @@ class FAFF(nn.Module):
         # 2. 计算子带差异
         Diff_LL = LL_T2 - LL_T1
         Diff_HFs = HFs_T2 - HFs_T1
+        # Diff = F_T2_aligned - F_T1_norm
         
         # 重塑 HF 子带以便于滤波 (B, C*3, H/2, W/2)
         B, C, _, H_d, W_d = Diff_HFs.shape
         Diff_HF_reshaped = Diff_HFs.view(B, self.hf_channels, H_d, W_d)
-
+        
         # 3. 应用自适应低频滤波
         Filtered_Diff_LL = self.lfdf_filter(Diff_LL)
         
@@ -755,7 +759,7 @@ class FAFF(nn.Module):
         # 6. IDWT 重构 (来自 WINet [1, 1])
         # 建议5：在 IDWT 前加入轻量级注意力增强，Filtered_Diff_LL → SE/CBAM，Filtered_Diff_HF → SE/CBAM
         D_freq_clean = self.idwt(Filtered_Diff_LL, Filtered_Diff_HFs)
-        
+        # D_freq_clean = self.hi(torch.cat([Filtered_Diff_LL, Filtered_Diff_HF_reshaped], dim=1))
         return D_freq_clean
     
 # # 提供给 gate 使用的空间差分平滑层   
@@ -936,50 +940,7 @@ class WaveletLoss(nn.Module):
         super(WaveletLoss, self).__init__()
         self.dwt = DWT()
         self.l1_loss = nn.L1Loss()
-    # def forward(self, pred_prob, target_mask):
-    #     # 1. 输入检查 (Input Check)
-    #     if torch.isnan(pred_prob).any():
-    #         raise ValueError("【严重错误】WaveletLoss 检测到 pred_prob 输入包含 NaN！请检查网络输出或 Sigmoid 前的值。")
-        
-    #     if torch.isnan(target_mask).any():
-    #         # 这是一个非常常见的情况：Label 中可能有 NaN
-    #         print("【警告】WaveletLoss 检测到 target_mask 包含 NaN，正在尝试修复...")
-    #         target_mask = torch.nan_to_num(target_mask, nan=0.0)
 
-    #     # 2. 格式对齐
-    #     if pred_prob.shape[1] == 2:
-    #         pred_change = pred_prob[:, 1:2, :, :]
-    #         target_change = target_mask[:, 1:2, :, :]
-    #     else:
-    #         pred_change = pred_prob
-    #         target_change = target_mask
-        
-    #     # 3. 检查 target_mask 的数值范围 (Value Range Check)
-    #     # 如果标签里有 255 (通常是 ignore_index)，计算 L1 Loss 会导致数值巨大，虽不至于 NaN 但会影响梯度
-    #     if target_change.max() > 1.0:
-    #          # 假设你只想要 0 和 1，如果出现 255，将其设为 0
-    #         target_change[target_change > 1] = 0.0
-
-    #     # 4. DWT 变换与检查
-    #     try:
-    #         _, pred_hfs = self.dwt(pred_change)
-    #         _, target_hfs = self.dwt(target_change)
-    #     except Exception as e:
-    #         print(f"【报错】DWT 模块内部出错: {e}")
-    #         # 打印输入形状，帮你看是不是尺寸太小了
-    #         print(f"输入形状: {pred_change.shape}")
-    #         raise e
-
-    #     # 5. 输出检查 (Output Check)
-    #     if torch.isnan(pred_hfs).any():
-    #         raise ValueError("【严重错误】pred_hfs 计算结果包含 NaN！这说明 DWT 模块内部产生了 NaN。")
-    #     if torch.isnan(target_hfs).any():
-    #         raise ValueError("【严重错误】target_hfs 计算结果包含 NaN！这说明 DWT 处理 Ground Truth 时出错了。")
-
-    #     # 6. 计算损失
-    #     loss = self.l1_loss(pred_hfs, target_hfs)
-        
-    #     return loss
     def forward(self, pred_prob, target_mask):
         # 1. 提取变化通道
         if pred_prob.shape[1] == 2:

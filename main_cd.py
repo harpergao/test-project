@@ -5,7 +5,7 @@ import torch
 # torch.backends.cudnn.benchmark = False
 
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+os.environ["PYTORCH_ALLOC_CONF"] = "max_split_size_mb:128"
 ###
 import utils
 from torch.utils.data import DataLoader

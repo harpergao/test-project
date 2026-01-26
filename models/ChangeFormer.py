@@ -257,7 +257,7 @@ class OverlapPatchEmbed2(nn.Module):
     """ Image to Patch Embedding
     """
 
-    def __init__(self, img_size=224, patch_size=7, stride=4, in_chans=3, embed_dim=768):
+    def __init__(self, img_size=224, patch_size=7, stride=4, in_chans=3, embed_dim=768, hinet_times=1):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
@@ -266,9 +266,17 @@ class OverlapPatchEmbed2(nn.Module):
         self.patch_size = patch_size
         self.H, self.W = img_size[0] // patch_size[0], img_size[1] // patch_size[1]
         self.num_patches = self.H * self.W
+        
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=stride,
                               padding=(patch_size[0] // 2, patch_size[1] // 2))
-        self.hinet = HINet_Module(in_channels=embed_dim)
+        # self.hinet = HINet_Module(in_channels=embed_dim)
+        #  * 号起到了解包(Unpacking)的作用
+        # 我们需要用 * 把列表“拆开”再传进去，是因为 nn.Sequential不接受列表，只接受一系列的模块作为参数
+        self.hinet_times = hinet_times
+        self.hinet = nn.Sequential(*[
+            HINet_Module(in_channels=embed_dim) for _ in range(self.hinet_times)
+        ])
+        
         self.norm = nn.LayerNorm(embed_dim)
 
         self.apply(self._init_weights)
@@ -1569,42 +1577,12 @@ class DecoderTransformer_v4(nn.Module):
         self.embedding_dim   = embedding_dim
         self.output_nc       = output_nc
         c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
-
-        self.fpn = FPN(
-            in_channels=[c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels], # 刚刚动态获取的通道数列表
-            out_channels=self.embedding_dim,       # FPN 输出的所有特征图的统一通道数，256 是一个常用值
-            num_outs=4 # FPN 输出的特征图数量，通常和输入数量一致
-            )
         
         #MLP decoder heads
         self.linear_c4 = MLP(input_dim=c4_in_channels, embed_dim=self.embedding_dim)
         self.linear_c3 = MLP(input_dim=c3_in_channels, embed_dim=self.embedding_dim)
         self.linear_c2 = MLP(input_dim=c2_in_channels, embed_dim=self.embedding_dim)
-        self.linear_c1 = MLP(input_dim=c1_in_channels, embed_dim=self.embedding_dim)
-
-        # self.STAttentionModule_c4 = SpatiotemporalAttentionFull(in_channels=c4_in_channels)
-        # self.STAttentionModule_c3 = SpatiotemporalAttentionFull(in_channels=c3_in_channels)
-        # self.STAttentionModule_c2 = SpatiotemporalAttentionFull(in_channels=c2_in_channels)
-        # self.STAttentionModule_c1 = SpatiotemporalAttentionFull(in_channels=c1_in_channels)
-        
-        self.fusion_c3 = FreqFusion(
-            hr_channels=self.embedding_dim,
-            lr_channels=self.embedding_dim,
-            scale_factor=2,
-            feature_resample=True,
-        )
-        self.fusion_c2 = FreqFusion(
-            hr_channels=self.embedding_dim,
-            lr_channels=self.embedding_dim,
-            scale_factor=2,
-            feature_resample=True
-        )
-        self.fusion_c1 = FreqFusion(
-            hr_channels=self.embedding_dim,
-            lr_channels=self.embedding_dim,
-            scale_factor=2,
-            feature_resample=True,
-        )
+        self.linear_c1 = MLP(input_dim=c1_in_channels, embed_dim=self.embedding_dim)  
 
         #convolutional Difference Modules
         self.diff_c4   = conv_diff(in_channels=2*self.embedding_dim, out_channels=self.embedding_dim)
@@ -1660,84 +1638,48 @@ class DecoderTransformer_v4(nn.Module):
             inputs = inputs[self.in_index]
 
         return inputs
-    
-    def change_feature(self, x, y):
-        i = 2
-        for index in range(0, len(x), i):
-            x[index], y[index] = y[index], x[index]
-        return x, y
-    
-    
 
     def forward(self, inputs1, inputs2):
-        #Transforming encoder features (select layers)
+ #Transforming encoder features (select layers)
         x_1 = self._transform_inputs(inputs1)  # len=4, 1/2, 1/4, 1/8, 1/16
         x_2 = self._transform_inputs(inputs2)  # len=4, 1/2, 1/4, 1/8, 1/16
-
-        # x_1, x_2 = self.change_feature(x_1, x_2)
-        # x_1 = self.fpn(x_1)
-        # x_2 = self.fpn(x_2)
-        # x_1, x_2 = self.change_feature(list(x_1), list(x_2))
 
         #img1 and img2 features
         c1_1, c2_1, c3_1, c4_1 = x_1
         c1_2, c2_2, c3_2, c4_2 = x_2
 
         ############## MLP decoder on C1-C4 ###########
-
         n, _, h, w = c4_1.shape
 
         outputs = []
         # Stage 4: x1/32 scale
-        
-        # c4_1, c4_2 = self.STAttentionModule_c4(c4_1, c4_2)
-        
         _c4_1 = self.linear_c4(c4_1).permute(0,2,1).reshape(n, -1, c4_1.shape[2], c4_1.shape[3])
         _c4_2 = self.linear_c4(c4_2).permute(0,2,1).reshape(n, -1, c4_2.shape[2], c4_2.shape[3])
-
         _c4   = self.diff_c4(torch.cat((_c4_1, _c4_2), dim=1))
         p_c4  = self.make_pred_c4(_c4)
         outputs.append(p_c4)
         _c4_up= resize(_c4, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 3: x1/16 scale
-        
-        # c3_1, c3_2 = self.STAttentionModule_c3(c3_1, c3_2)
-        
         _c3_1 = self.linear_c3(c3_1).permute(0,2,1).reshape(n, -1, c3_1.shape[2], c3_1.shape[3])
         _c3_2 = self.linear_c3(c3_2).permute(0,2,1).reshape(n, -1, c3_2.shape[2], c3_2.shape[3])
-        # _c3   = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1)) + F.interpolate(_c4, scale_factor=2, mode="bilinear")
-        _c3 = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1))
-        _, hr_c3, lr_c4 = self.fusion_c3(hr_feat=_c3, lr_feat=_c4)
-        _c3 = hr_c3 + lr_c4
+        _c3   = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1)) + F.interpolate(_c4, scale_factor=2, mode="bilinear")
         p_c3  = self.make_pred_c3(_c3)
         outputs.append(p_c3)
         _c3_up= resize(_c3, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 2: x1/8 scale
-        
-        # c2_1, c2_2 = self.STAttentionModule_c2(c2_1, c2_2)
-        
         _c2_1 = self.linear_c2(c2_1).permute(0,2,1).reshape(n, -1, c2_1.shape[2], c2_1.shape[3])
         _c2_2 = self.linear_c2(c2_2).permute(0,2,1).reshape(n, -1, c2_2.shape[2], c2_2.shape[3])
-        # _c2   = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1)) + F.interpolate(_c3, scale_factor=2, mode="bilinear")
-        _c2 = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1))
-        _, hr_c2, lr_c3 = self.fusion_c2(hr_feat=_c2, lr_feat=_c3)
-        _c2 = hr_c2 + lr_c3
+        _c2   = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1)) + F.interpolate(_c3, scale_factor=2, mode="bilinear")
         p_c2  = self.make_pred_c2(_c2)
         outputs.append(p_c2)
         _c2_up= resize(_c2, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 1: x1/4 scale
-        
-        # c1_1, c1_2 = self.STAttentionModule_c1(c1_1, c1_2)
-        
         _c1_1 = self.linear_c1(c1_1).permute(0,2,1).reshape(n, -1, c1_1.shape[2], c1_1.shape[3])
         _c1_2 = self.linear_c1(c1_2).permute(0,2,1).reshape(n, -1, c1_2.shape[2], c1_2.shape[3])
-        # _c1   = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1)) + F.interpolate(_c2, scale_factor=2, mode="bilinear")
-        _c1 = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1))
-        _, hr_c1, lr_c2 = self.fusion_c1(hr_feat=_c1, lr_feat=_c2)
-        _c1 = hr_c1 + lr_c2
+        _c1   = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1)) + F.interpolate(_c2, scale_factor=2, mode="bilinear")
         p_c1  = self.make_pred_c1(_c1)
         outputs.append(p_c1)
 
@@ -2012,19 +1954,21 @@ class EncoderTransformer_v5(nn.Module):
 
         # patch embedding definitions
         self.patch_embed1 = OverlapPatchEmbed2(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
-                                              embed_dim=embed_dims[0])
+                                              embed_dim=embed_dims[0], hinet_times=1)
         self.patch_embed2 = OverlapPatchEmbed2(img_size=img_size // 4, patch_size=patch_size, stride=2, in_chans=embed_dims[0],
-                                              embed_dim=embed_dims[1])
+                                              embed_dim=embed_dims[1], hinet_times=1)
         self.patch_embed3 = OverlapPatchEmbed2(img_size=img_size // 8, patch_size=patch_size, stride=2, in_chans=embed_dims[1],
-                                              embed_dim=embed_dims[2])
+                                              embed_dim=embed_dims[2], hinet_times=1)
         self.patch_embed4 = OverlapPatchEmbed2(img_size=img_size // 16, patch_size=patch_size, stride=2, in_chans=embed_dims[2],
-                                              embed_dim=embed_dims[3])
-        
-        # # 放在了OverlapPatchEmbed2里边，为了正常展平和LayerNorm
-        # self.hinet1 = HINet_Module(in_channels=embed_dims[0])
-        # self.hinet2 = HINet_Module(in_channels=embed_dims[1])
-        # self.hinet3 = HINet_Module(in_channels=embed_dims[2])
-        # self.hinet4 = HINet_Module(in_channels=embed_dims[3])
+                                              embed_dim=embed_dims[3], hinet_times=1)
+        # self.patch_embed1 = OverlapPatchEmbed(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
+        #                                       embed_dim=embed_dims[0])
+        # self.patch_embed2 = OverlapPatchEmbed(img_size=img_size // 4, patch_size=patch_size, stride=2, in_chans=embed_dims[0],
+        #                                       embed_dim=embed_dims[1])
+        # self.patch_embed3 = OverlapPatchEmbed(img_size=img_size // 8, patch_size=patch_size, stride=2, in_chans=embed_dims[1],
+        #                                       embed_dim=embed_dims[2])
+        # self.patch_embed4 = OverlapPatchEmbed(img_size=img_size // 16, patch_size=patch_size, stride=2, in_chans=embed_dims[2],
+        #                                       embed_dim=embed_dims[3])
         
         # Stage-1 (x1/4 scale)
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
@@ -2205,8 +2149,8 @@ class DecoderTransformer_v5(nn.Module):
         self.make_pred_c2 = make_prediction(in_channels=c2_in_channels, out_channels=self.output_nc)
         self.make_pred_c1 = make_prediction(in_channels=c1_in_channels, out_channels=self.output_nc)
         
-        self.BRH = BoundaryRefinementHead(in_channels=c1_in_channels, max_offset_scale=0.05)
-        self.BRH_final = BoundaryRefinementHead(in_channels=c1_in_channels, max_offset_scale=0.01)
+        # self.BRH = BoundaryRefinementHead(in_channels=c1_in_channels, max_offset_scale=0.05)
+        # self.BRH_final = BoundaryRefinementHead(in_channels=c1_in_channels, max_offset_scale=0.01)
         self.dense1 = nn.Sequential(
             nn.Conv2d(c1_in_channels, c1_in_channels * 4, kernel_size=3, padding=1),
             nn.PixelShuffle(2),   # x2
@@ -2232,6 +2176,10 @@ class DecoderTransformer_v5(nn.Module):
         x4_p = self.make_pred_c4(x4_f)
         outputs.append(x4_p)
         x4_up = F.interpolate(x4_f, scale_factor=2, mode="bilinear", align_corners=False)
+        # c4_spatial = c4_1 - c4_2
+        # x4_p = self.make_pred_c4(c4_spatial)
+        # outputs.append(x4_p)
+        # x4_up = F.interpolate(c4_spatial, scale_factor=2, mode="bilinear", align_corners=False)
         
         # Stage 3: x1/16 scale
         x3_c = self.faff3(c3_1, c3_2)
@@ -2242,6 +2190,12 @@ class DecoderTransformer_v5(nn.Module):
         x3_p = self.make_pred_c3(x3)
         outputs.append(x3_p)
         x3_up = F.interpolate(x3, scale_factor=2, mode="bilinear", align_corners=False)
+        # c3_spatial = c3_1 - c3_2
+        # x3_cat = torch.cat((x4_up, c3_spatial), dim=1)
+        # x3 = self.d3(x3_cat)
+        # x3_p = self.make_pred_c3(x3)
+        # outputs.append(x3_p)
+        # x3_up = F.interpolate(x3, scale_factor=2, mode="bilinear", align_corners=False)
         
         # Stage 2: x1/8 scale
         x2_c = self.faff2(c2_1, c2_2)
@@ -2252,6 +2206,12 @@ class DecoderTransformer_v5(nn.Module):
         x2_p = self.make_pred_c2(x2)
         outputs.append(x2_p)
         x2_up = F.interpolate(x2, scale_factor=2, mode="bilinear", align_corners=False)
+        # c2_spatial = c2_1 - c2_2
+        # x2_cat = torch.cat((x3_up, c2_spatial), dim=1)
+        # x2 = self.d2(x2_cat)
+        # x2_p = self.make_pred_c2(x2)
+        # outputs.append(x2_p)
+        # x2_up = F.interpolate(x2, scale_factor=2, mode="bilinear", align_corners=False)
         
         # Stage 1: x1/4 scale
         x1_c = self.faff1(c1_1, c1_2)
@@ -2261,12 +2221,16 @@ class DecoderTransformer_v5(nn.Module):
         x1 = self.d1(x1_cat)
         x1_p = self.make_pred_c1(x1)
         outputs.append(x1_p)
+        # c1_spatial = c1_1 - c1_2
+        # x1_cat = torch.cat((x2_up, c1_spatial), dim=1)
+        # x1 = self.d1(x1_cat)
+        # x1_p = self.make_pred_c1(x1)
+        # outputs.append(x1_p)
         
         # Final prediction
-        x = self.BRH(x1)
-        x = self.dense1(x)
+        
+        x = self.dense1(x1)
         x = self.smoother(x)
-        x = self.BRH_final(x)
         x = self.logits(x)
         
         outputs.append(x)
