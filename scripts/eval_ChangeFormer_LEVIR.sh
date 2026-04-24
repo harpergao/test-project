@@ -2,13 +2,15 @@
 
 gpus=0
 
-data_name=SYSU
-net_G=FreqFormer #This is the best version
+data_name=LEVIR
+net_G=ELGCNet #This is the best version
 split=test
-vis_root=/mnt/data1/gyf/code/newtest/ChangeFormer/vis6/SYSU_FreqFormer
-project_name=SYSU_FreqFormer
-checkpoints_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint4/SYSU1/CD_FreqFormer_SYSU_b16_lr0.0002_adamw_train_val_300_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256
-checkpoint_name=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint4/SYSU1/CD_FreqFormer_SYSU_b16_lr0.0002_adamw_train_val_300_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/best_ckpt.pt
+vis_root=/mnt/data1/gyf/code/newtest/ChangeFormer/vis6/L2L_ELGCNet
+project_name=L2L_ELGCNet
+# checkpoints_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint4/SYSU1/CD_FreqFormer_SYSU_b16_lr0.0002_adamw_train_val_300_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256
+# checkpoint_name=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint4/SYSU1/CD_FreqFormer_SYSU_b16_lr0.0002_adamw_train_val_300_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/best_ckpt.pt
+checkpoints_root=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint5/LEVIR_ELGCNet/CD_ELGCNet_LEVIR_b16_lr0.0002_adamw_train_val_300_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256
+checkpoint_name=/mnt/data1/gyf/code/newtest/ChangeFormer/checkpoint5/LEVIR_ELGCNet/CD_ELGCNet_LEVIR_b16_lr0.0002_adamw_train_val_300_linear_ce_multi_train_True_multi_infer_False_shuffle_AB_False_embed_dim_256/best_ckpt.pt
 img_size=256
 embed_dim=256 #Make sure to change the embedding dim (best and default = 256)
 

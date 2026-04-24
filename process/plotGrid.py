@@ -5,7 +5,7 @@ import os
 # ==================== 1. 配置区域 (只需修改这里) ====================
 
 # 定义每一列的标题 (显示在图片最上方)
-COL_HEADERS = ["T1 image", "T2 image", "FC-EF", "Siam-diff", "Siam-conc", "ChangeFormer", "BIT", "DTCDSCN", "ELGCNet", "FACDNet", "Label"]
+COL_HEADERS = ["T1 image", "T2 image", "FC-EF", "Siam-diff", "Siam-conc", "ChangeFormer", "BIT", "DTCDSCN", "ELGCNet", "FACDNet", "Ground Truth"]
 
 # 定义每一行的标题 (显示在图片最左侧，比如数据集名称)
 # 如果某一行不想显示标题，填空字符串 "" 即可

@@ -272,10 +272,11 @@ class OverlapPatchEmbed2(nn.Module):
         # self.hinet = HINet_Module(in_channels=embed_dim)
         #  * 号起到了解包(Unpacking)的作用
         # 我们需要用 * 把列表“拆开”再传进去，是因为 nn.Sequential不接受列表，只接受一系列的模块作为参数
-        self.hinet_times = hinet_times
-        self.hinet = nn.Sequential(*[
-            HINet_Module(in_channels=embed_dim) for _ in range(self.hinet_times)
-        ])
+        # self.hinet_times = hinet_times
+        # self.hinet = nn.Sequential(*[
+        #     HINet_Module(in_channels=embed_dim) for _ in range(self.hinet_times)
+        # ])
+        self.hinet = HINet_Module(in_channels=embed_dim)
         
         self.norm = nn.LayerNorm(embed_dim)
 
@@ -1953,14 +1954,22 @@ class EncoderTransformer_v5(nn.Module):
         self.embed_dims     = embed_dims
 
         # patch embedding definitions
+        # self.patch_embed1 = OverlapPatchEmbed2(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
+        #                                       embed_dim=embed_dims[0], hinet_times=1)
+        # self.patch_embed2 = OverlapPatchEmbed2(img_size=img_size // 4, patch_size=patch_size, stride=2, in_chans=embed_dims[0],
+        #                                       embed_dim=embed_dims[1], hinet_times=1)
+        # self.patch_embed3 = OverlapPatchEmbed2(img_size=img_size // 8, patch_size=patch_size, stride=2, in_chans=embed_dims[1],
+        #                                       embed_dim=embed_dims[2], hinet_times=1)
+        # self.patch_embed4 = OverlapPatchEmbed2(img_size=img_size // 16, patch_size=patch_size, stride=2, in_chans=embed_dims[2],
+        #                                       embed_dim=embed_dims[3], hinet_times=1)
         self.patch_embed1 = OverlapPatchEmbed2(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
-                                              embed_dim=embed_dims[0], hinet_times=1)
+                                              embed_dim=embed_dims[0])
         self.patch_embed2 = OverlapPatchEmbed2(img_size=img_size // 4, patch_size=patch_size, stride=2, in_chans=embed_dims[0],
-                                              embed_dim=embed_dims[1], hinet_times=1)
+                                              embed_dim=embed_dims[1])
         self.patch_embed3 = OverlapPatchEmbed2(img_size=img_size // 8, patch_size=patch_size, stride=2, in_chans=embed_dims[1],
-                                              embed_dim=embed_dims[2], hinet_times=1)
+                                              embed_dim=embed_dims[2])
         self.patch_embed4 = OverlapPatchEmbed2(img_size=img_size // 16, patch_size=patch_size, stride=2, in_chans=embed_dims[2],
-                                              embed_dim=embed_dims[3], hinet_times=1)
+                                              embed_dim=embed_dims[3])
         # self.patch_embed1 = OverlapPatchEmbed(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans,
         #                                       embed_dim=embed_dims[0])
         # self.patch_embed2 = OverlapPatchEmbed(img_size=img_size // 4, patch_size=patch_size, stride=2, in_chans=embed_dims[0],

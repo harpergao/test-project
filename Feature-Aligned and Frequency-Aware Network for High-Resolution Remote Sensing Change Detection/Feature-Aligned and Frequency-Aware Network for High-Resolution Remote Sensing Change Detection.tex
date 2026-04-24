@@ -1,0 +1,350 @@
+\documentclass[lettersize,journal]{IEEEtran}
+\usepackage{amsmath,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{array}
+\usepackage[caption=false,font=normalsize,labelfont=sf,textfont=sf]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{amssymb}
+\usepackage{multirow}
+\usepackage{float}
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+% updated with editorial comments 8/9/2021
+
+
+\begin{document}
+
+\title{Feature-Aligned and Frequency-Aware Network \\ for High-Resolution Remote Sensing Change Detection}
+
+\author{Yunfei Gao, Tengfei Bao, Tao Fang, Hong Huo
+        % <-this % stops a space
+\thanks{Yunfei Gao, Tao Fang, and Hong Huo are with the Department of Automation, Shanghai Jiao Tong University, Shanghai 200240, China (e-mail: harper24@sjtu.edu.cn; tfang@sjtu.edu.cn; huohong@sjtu.edu.cn).
+
+Tengfei Bao is with the Department of Automation, Shanghai Jiao Tong University, Shanghai 200240, China, and also with the Electric Power College, Inner Mongolia University of Technology, Hohhot 010051, China (e-mail: btflmqy1314@sjtu.edu.cn)}% <-this % stops a space
+\thanks{Manuscript received April 19, 2021; revised August 16, 2021.}}
+
+% The paper headers
+\markboth{Journal of \LaTeX\ Class Files,~Vol.~14, No.~8, August~2021}%
+{Shell \MakeLowercase{\textit{et al.}}: A Sample Article Using IEEEtran.cls for IEEE Journals}
+
+\IEEEpubid{0000--0000/00\$00.00~\copyright~2021 IEEE}
+% Remember, if you use this you must call \IEEEpubidadjcol in the second
+% column for its text to clear the IEEEpubid mark.
+
+\maketitle
+
+\begin{abstract}
+Current spatiotemporal modeling approaches in remote sensing change detection often struggle to distinguish phenological pseudo-changes from semantic changes, leading to false alarms and blurred boundaries. To address this, a Feature-Aligned and Frequency-Aware Network (FACDNet) is proposed based on a physics-inspired decomposition strategy. It consists of three main modules: Feature Distribution Alignment Module (FDAM), Frequency-domain Adaptive Filtering Module (FAFM), and Change Attention Guidance Module (CAGM). Specifically, FDAM first is integrated within the Siamese encoder, and employs a statistical feature alignment mechanism to eliminate non-semantic style discrepancies. Subsequently, FAFM leverages the wavelet transform to adaptively suppress low-frequency environmental noise while amplifying high-frequency boundary signals, effectively disentangling semantic changes from background interference. Finally, this dual-domain consistency is verified and reinforced by CAGM via an attention guidance scheme to ensure reliable change detection. Experimental results on three benchmarks demonstrate that FACDNet significantly outperforms state-of-the-art methods in both detection accuracy and robustness against complex radiometric inconsistencies of bi-temporal high-resolution images. 
+
+\end{abstract}
+
+\begin{IEEEkeywords}
+High-resolution remote sensing, change detection, frequency-aware, feature fusion, deep learning.
+\end{IEEEkeywords}
+\vspace{-5pt}
+\section{Introduction}
+\IEEEPARstart{D}{riven} by rapid global urbanization and modernization, high-resolution remote sensing change detection plays a pivotal role in critical domains such as disaster monitoring, urban planning, and environmental assessment~\cite{li2022breaking,zheng2022changemask,yang2017monitoring}. As a core technology in the remote sensing field, it aims to capture the dynamic evolution of targets of interest by analyzing bi-temporal or multi-temporal high-resolution images. 
+
+In recent years, deep learning has revolutionized remote sensing change detection. Pioneering CNN-based approaches, such as the FCN baseline~\cite{daudt2018fully} and pyramid-enhanced networks~\cite{lei2019landslide}, laid the foundation for pixel-wise prediction. However, restricted by the local receptive fields of convolutions, these methods often struggle to capture the global semantic context required for complex spatiotemporal modeling.
+
+To enhance feature discriminability for change detection, attention mechanisms have been introduced to CNNs for highlighting salient regions. Notably, CDNeXt~\cite{wei2024robust} and ASGCN~\cite{wang2024attention} employ attention to align temporal styles and refine representations, respectively. Yet, since attention mechanisms are usually merely used as auxiliary modules within CNNs, they still lack the capacity to efficiently model intrinsic global interactions. More recently, Transformer-based architectures have emerged to model long-range dependencies to achieve global receptive fields, critical for maintaining semantic consistency. For instance, ChangeFormer~\cite{bandara2022transformer} improves boundary delineation via hierarchical Siamese encoders, while ELGC-Net~\cite{noman2024elgc} and M-Swin~\cite{pan2024m} introduce advanced attention mechanisms to enhance global context aggregation.
+
+However, existing transformer-based architectures usually rely solely on spatial domain modeling, resulting in a limited ability to distinguish fine edges from environmental noise. Particularly when bi-temporal images suffer from severe style discrepancies, such as radiometric inconsistencies arising from seasonal phenology or varying illumination, they often struggle to decouple these non-semantic factors from real changes, leading to an increased false alarm rate.
+
+\begin{figure*}[!t] 
+\centering 
+\includegraphics[width=\textwidth]{fig1} 
+\caption{The overall architecture of the proposed FACDNet. (a) Overview. (b) Frequency-domain Adaptive Filtering Module. (c) Change Attention Guidance Module.}
+\label{fig_1}
+\vspace{-15pt}
+\end{figure*}
+
+\IEEEpubidadjcol
+To overcome this, frequency-domain perception has emerged as a promising solution. In particular, the Wavelet Transform can losslessly decompose features into sub-bands to suppress pseudo-changes (low-frequency) and enhance real changes (high-frequency). Some existing work has explored this direction; for example, the Wavelet Transform~\cite{zhang2024pan} enhances high-frequency information learning, while CAFENet~\cite{duan2025cafenet} improves robustness through frequency feature exchange. However, current frequency-based approaches do not explicitly address bi-temporal feature distribution alignment, which is critical for mitigating non-semantic variances caused by style discrepancies while preserving semantic structures.
+
+In light of this, a Feature-Aligned and Frequency-Aware Network (FACDNet) is proposed. To address the feature distribution shift in bi-temporal images, a Feature Distribution Alignment Module (FDAM) is first integrated within the Siamese encoder to perform style-level feature alignment by suppressing non-semantic style discrepancies. Building on this, we further design a Frequency-domain Adaptive Filtering Module (FAFM) as the core component, leveraging the Wavelet Transform to decouple feature frequencies. Specifically, through adaptive filtering strategy, learnable low-pass and high-pass filters are constructed to suppress low-frequency pseudo-changes such as global illumination shifts and seasonal vegetation phenology while sharpening high-frequency components critical for fine-grained targets such as building boundaries and road networks. Finally, a Change Attention Guidance Module (CAGM) is employed to verify and enhance cross-domain feature consistency, thereby achieving robust change detection.
+
+The main contributions of this letter are summarized as follows:
+
+1) We propose a Feature-Aligned and Frequency-Aware Network (FACDNet). This network integrates a feature distribution alignment mechanism with explicit frequency-domain analysis, effectively resolving the challenges of pseudo-change interference and boundary blurring in high-resolution remote sensing change detection.
+
+2) We design a Frequency-domain Adaptive Filtering Module (FAFM). By constructing spatially-variant adaptive filters in the wavelet domain, this module explicitly suppresses low-frequency background noise and enhances high-frequency edge details, significantly improving model robustness.
+\vspace{-5pt}
+\section{Methods}
+\vspace{-5pt}
+\subsection{Overview}
+
+As illustrated in Fig. \ref{fig_1}, the proposed FACDNet adopts a Siamese hierarchical architecture comprising three main modules: Feature Distribution Alignment Module (FDAM), Frequency-domain Adaptive Filtering Module (FAFM), and Change Attention Guidance Module (CAGM). Specifically, FDAM is first integrated within the Siamese encoder that built upon a weight-shared Siamese Transformer. To explicitly address radiometric inconsistencies, we integrate a FDAM with a transformer block in each encoding stage. This integration ensures that feature distributions are aligned to mitigate non-semantic style discrepancies, establishing a robust, style-invariant foundation for the Transformer block to capture long-range global semantic dependencies. The encoder generates a feature pyramid across four stages with downsampling ratios of $\{4, 8, 16, 32\}$. This design effectively balances the trade-off between semantics and localization: shallow encoding stages ($1/4, 1/8$) preserve fine-grained spatial details for boundary delineation, while deep encoding stages ($1/16, 1/32$) capture high-level semantics to identify change categories. To fully exploit the feature-aligned multi-scale representations and further refine change boundaries, each FAFM transforms features into the frequency domain and applies adaptive filters to suppress pseudo-changes in low-frequency components and enhance boundaries in high-frequency components. Subsequently, each CAGM employs a soft-gating mechanism to adaptively aggregate complementary information from both the frequency-enhanced and spatial difference features, yielding the multi-scale fused features. Finally, a cascaded decoder recovers spatial resolution by fusing upsampled features with CAGM outputs, followed by a prediction head to produce the binary change map.
+
+
+\vspace{-5pt}
+\subsection{Feature Distribution Alignment Module}
+Bi-temporal high-resolution remote sensing images often suffer from radiometric inconsistencies that act as noise, leading to pseudo-changes. To address this, the Feature Distribution Alignment Module (FDAM) is proposed and integrated within the Siamese encoder to eliminate non-semantic style discrepancies. By revisiting the Half-Instance Normalization strategy~\cite{chen2021hinet} within the context of Siamese encoding, FDAM provides a mechanism to selectively align feature distributions while strictly preserving semantic structures. By deploying this module at each encoding stage, this design ensures consistent style invariance across multi-scale features.
+
+As illustrated in Fig. \ref{fig_2}, let $F_{in} \in \mathbb{R}^{C \times H_k \times W_k}$ denote the input feature for the $k$-th stage, derived from either the raw image (in the first stage) or the preceding stage's output (in subsequent stages). A $1\times1$ convolution is first employed to expand the channel dimension by a factor of 2, yielding the intermediate feature $F_{mid} \in \mathbb{R}^{2C \times H_k \times W_k}$.
+
+Subsequently, $F_{mid}$ is evenly split along the channel dimension into two distinct components: a style-aligned part $F_s$ and a content-preservation part $F_c$. The first component, $F_s$, undergoes Instance Normalization (IN) to eliminate non-semantic style variances, yielding the calibrated feature $F'_{s}$. In contrast, $F_c$ retains the original representation via an identity mapping to preserve spatial details. Then $F'_{s}$ and $F_{c}$ are concatenated to form $F_{sc}$.
+
+To enhance feature interactions and restore the original channel dimension, $F_{sc}$ is processed by a $3\times3$ convolution and LeakyReLU activations. Finally, a residual connection adds a projected version of $F_{mid}$ to this output, ensuring stable gradient flow:
+\vspace{-5pt}
+\begin{equation}
+\label{deqn_Fout}
+F_{out} = \sigma_{L}(\text{Conv}_{3\times3}(\sigma_{L}(F_{sc}))) + \text{Conv}_{1\times1}(F_{mid})
+\vspace{-5pt}
+\end{equation}
+where $\sigma_{L}$ denotes the LeakyReLU activation function, the $1\times1$ convolution in the residual path implies a projection to match the output dimensions.
+
+By effectively mitigating the divergence in style representations between bi-temporal images while strictly preserving their spatial contents, FDAM produces style-invariant features. The feature-aligned $F_{out}$ is fed into the Transformer block for semantic modeling. Through this hierarchical encoding, we obtain the feature-aligned multi-scale feature pairs $\{F_{k}^{T1}, F_{k}^{T2}\}_{k=1}^{4}$, serving as inputs for the subsequent frequency-domain analysis.
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{fig2}
+\caption{Detailed illustration of the Feature Distribution Alignment Module.}
+\label{fig_2}
+\vspace{-15pt}
+\end{figure}
+
+\vspace{-10pt}
+\subsection{Frequency-domain Adaptive Filtering Module} 
+
+Traditional methods often struggle with seasonal or phenological pseudo-changes, which introduce complex interference across different frequency bands. To address this, FAFM performs spectral decomposition inspired by frequency-aware fusion in dense prediction~\cite{chen2024frequency}, and applies spatially-variant filtering to effectively separate real changes from such frequency-specific noise at the feature level.
+
+Given the multi-scale features $\{F_{k}^{T1}, F_{k}^{T2}\}$ extracted by Siamese encoder integrated with FDAM, Discrete Wavelet Transform (DWT) with Haar wavelets is employed to losslessly decompose them into a low-frequency sub-band $LL$ and high-frequency sub-bands $\{LH, HL, HH\}$. The bi-temporal difference maps are calculated as:
+\begin{align}
+\label{deqn_DWT1}
+\Delta_{LL} &= F_{LL}^{T2} - F_{LL}^{T1} \\
+\label{deqn_DiffHF}
+\Delta_{HF} &= \operatorname{Concat}(\Delta_{LH}, \Delta_{HL}, \Delta_{HH})
+\vspace{-5pt}
+\end{align}
+where $\Delta_{b} = F_{b}^{T2} - F_{b}^{T1}$ for $b \in \{LH, HL, HH\}$.
+
+To enhance features, two parallel generators are designed to produce spatially-variant kernels for the respective frequency bands.
+
+\textit{Low-frequency Suppression:} 
+To smooth out intra-class inconsistencies, a low-pass filter (LPF) is predicted. The difference $\Delta_{LL}$ is processed by a lightweight CNN block to generate weights. A Softmax operation applied across the spatial dimensions ensures the weights sum to 1, forming a smoothing kernel $W_{LPF}$:
+\vspace{-5pt}
+\begin{equation}
+\label{deqn_WLPF}
+W_{LPF} = \text{Softmax}(\mathcal{F}_{cnn}(\Delta_{LL}))
+\vspace{-5pt}
+\end{equation}
+
+\textit{High-frequency Enhancement:} 
+To extract structural boundaries, we employ a residual construction strategy. Since Softmax generates a smoothing (low-pass) kernel, subtracting it from the identity kernel $I$ yields a high-pass filter (HPF), akin to unsharp masking logic:
+\vspace{-5pt}
+\begin{equation}
+\label{deqn_WHPF}
+W_{HPF} = I - \text{Softmax}(\mathcal{F}_{cnn}(\Delta_{HF}))
+\vspace{-5pt}
+\end{equation}
+
+Finally, dynamic filtering is applied to the difference maps. Unlike standard convolution where kernels are shared, pixel-wise filtering is performed using the predicted spatially-variant kernels. Specifically, for a pixel at position $(i, j)$, the filtered output is computed by aggregating the features in the local neighborhood $\Omega$ weighted by the specific kernel generated for that location:
+\vspace{-5pt}
+\begin{align}
+\label{deqn_Fclean_LF}
+F_{LL}^{clean}(i, j) &= \sum_{p, q \in \Omega} W_{LPF}^{(i, j)}(p, q) \cdot \Delta_{LL}(i+p, j+q)\\
+\label{deqn_Fclean_HF}
+F_{HF}^{clean}(i, j) &= \sum_{p, q \in \Omega} W_{HPF}^{(i, j)}(p, q) \cdot \Delta_{HF}(i+p, j+q)
+\vspace{-5pt}
+\end{align}
+
+where $\Omega$ denotes the local window (e.g., $3 \times 3$) centered at $(i, j)$, and $(p, q)$ represents the spatial offset within the kernel. 
+
+The refined high-frequency components $F_{HF}^{clean}$ are then split back into their respective sub-bands to reconstruct the features via Inverse DWT (IDWT):
+\begin{equation}
+\label{deqn_Dfreq}
+D_{freq} = \text{IDWT}(F_{LL}^{clean}, F_{HF}^{clean})
+\vspace{-5pt}
+\end{equation}
+
+\begin{figure*}[!t] 
+\centering 
+\includegraphics[width=0.7\textwidth]{fig3} 
+\caption{Visual qualitative comparisons on three benchmark datasets. White, Black, Red, and Blue indicate true positive (TP), true negative (TN), false positive (FP), and false negative (FN), respectively.}
+\label{fig_3}
+\vspace{-10pt}
+\end{figure*}
+
+\begin{table*}[!t]
+\caption{QUANTITATIVE COMPARISONS WITH STATE-OF-THE-ART METHODS ON THREE HIGH-RESOLUTION REMOTE SENSING DATASETS. THE BEST RESULTS ARE HIGHLIGHTED IN BOLD\label{tab:comparison}}
+\centering
+\footnotesize
+
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{cc|cccc|cccc|cccc}
+\hline
+\multicolumn{2}{c|}{\multirow{2}{*}{Method}} & \multicolumn{4}{c|}{LEVIR-CD} & \multicolumn{4}{c|}{WHU-CD} & \multicolumn{4}{c}{SYSU-CD} \\
+
+\cline{3-14}
+
+ &  & Pre(\%) & Rec(\%) & F1(\%) & IoU(\%) & Pre(\%) & Rec(\%) & F1(\%) & IoU(\%) & Pre(\%) & Rec(\%) & F1(\%) & IoU(\%) \\
+\hline
+
+\multirow{4}{*}{CNN-based} & FC-EF~\cite{daudt2018fully} & 84.25 & 85.06 & 85.90 & 74.01 & 75.24 & 77.95 & 76.57 & 62.04 & 80.68 & 73.92 & 62.80 & \textbf{77.15} \\
+ & Siam-diff~\cite{daudt2018fully} & 88.96 & 85.08 & 86.97 & 76.95 & 64.07 & 83.24 & 72.41 & 56.75 & \textbf{91.20} & 51.05 & 65.46 & 48.65 \\
+ & Siam-conc~\cite{daudt2018fully} & 89.28 & 86.48 & 87.86 & 78.34 & 57.47 & 84.32 & 68.35 & 51.92 & 83.43 & 73.80 & 78.32 & 64.37 \\
+ & DTCDSCN~\cite{liu2020building} & 91.87 & 89.77 & 90.81 & 83.16 & 91.02 & \textbf{88.79} & 89.89 & 81.64 & 85.15 & 73.96 & 79.16 & 65.51 \\
+\hline
+\multirow{3}{*}{\shortstack{Transformer-\\based}} & ChangeFormer~\cite{bandara2022transformer} & 91.97 & 88.70 & 90.30 & 82.32 & 90.40 & 83.43 & 86.77 & 76.63 & 81.95 & 73.71 & 77.21 & 62.88 \\
+ & BIT~\cite{chen2021remote} & 91.79 & 88.28 & 90.00 & 81.82 & 88.43 & 83.75 & 86.03 & 75.28 & 82.87 & 74.39 & 78.40 & 64.48 \\
+ & ELGCNet~\cite{noman2024elgc} & 92.52 & 89.70 & 91.09 & 83.64 & 90.94 & 84.39 & 87.54 & 77.84 & 85.28 & 74.39 & 79.46 & 65.93 \\
+\hline
+ & FACDNet (Ours) & \textbf{92.67} & \textbf{90.75} & \textbf{91.71} & \textbf{84.68} & \textbf{94.34} & 87.92 & \textbf{91.02} & \textbf{83.51} & 85.24 & \textbf{77.14} & \textbf{80.99} & 68.05 \\
+\hline
+\end{tabular}%
+}
+\vspace{-10pt}
+\end{table*}
+
+\subsection{Change Attention Guidance Module} 
+
+After frequency-domain filtering, we require a mechanism to verify the consistency between the frequency-enhanced difference $D_{freq}$ and the raw spatial difference at the corresponding scale, denoted as $D_{spatial} = F_{k}^{T2} - F_{k}^{T1}$. This ``cross-domain verification'' prevents the model from being misled by structured pseudo-changes that might mimic real high-frequency edges.
+To implement this, $D_{spatial}$ and $D_{freq}$ are treated as complementary evidence sources. For each, we generate a spatial attention map ($A_{spatial}$ and $A_{freq}$) using a standard spatial attention block to highlight high-confidence regions.
+\begin{equation}
+\label{deqn_Ax}
+\mbox{
+\small
+$A(X) = \text{Conv}_{7\times7}(\text{Concat}(\text{AvgPool}(X), \text{MaxPool}(X)))$}
+\vspace{-5pt}
+\end{equation}
+
+This yields two attention maps: $A_{spatial}$ derived from $D_{spatial}$, and $A_{freq}$ derived from $D_{freq}$.
+
+To achieve robust integration, we employ a soft-gating mechanism. Attention maps are fused to generate a global gate $G \in [0, 1]$, which adaptively determines the information flow:
+\begin{align}
+\label{deqn_Gate}
+Gate &= \sigma(A_{spatial} + A_{freq})\\
+\label{deqn_Ffused}
+F_{fused} &= D_{freq} \cdot Gate + D_{spatial} \cdot (1 - Gate)
+\vspace{-5pt}
+\end{align}
+
+Unlike a simple sum, this gate functions as a confidence switch: it prioritizes frequency-purified features $D_{freq}$ when the cross-domain consensus is strong (i.e., high confidence in change), while retaining the raw spatial context $D_{spatial}$ in uncertain background regions.
+
+To recover spatial resolution, a cascaded decoding structure is employed. At each scale $k$, the feature map $F_{k+1}^{dec}$ from the deeper layer is upsampled and concatenated with the corresponding fused feature $F_{k}^{fused}$. Subsequently, a residual block $\mathcal{R}(\cdot)$ refines these aggregated features to generate $F_{k}^{dec}$. Finally, a prediction head projects the highest-resolution features to produce the binary change map.
+\begin{equation}
+\label{deqn_Fidec}
+F_{k}^{dec} = \mathcal{R} \left( \mathrm{concat} \left( \mathrm{up}(F_{k+1}^{dec}), F_{k}^{fused} \right) \right)
+\vspace{-5pt}
+\end{equation}
+
+\vspace{-10pt}
+\subsection{Loss Function}
+The objective function is a weighted combination of the standard Binary Cross-Entropy (BCE) loss and an auxiliary Wavelet Loss. $L_{bce}$ serves as the primary supervision for pixel-wise classification. To further enforce boundary alignment, we introduce the Wavelet Loss ($L_{freq}$). Specifically, we apply the same DWT (as in FAFM) to decompose the prediction map $P$ and ground truth $G$. The Wavelet Loss is defined as the $L_1$ distance between their high-frequency components ($P_{H}, G_{H}$):
+\begin{equation}
+\label{deqn_Lfreq}
+L_{freq} = || P_{H} - G_{H} ||_1
+\end{equation}
+where $P_{H}$ and $G_{H}$ represent the concatenation of high-frequency sub-bands $\{LH, HL, HH\}$. The total loss is formulated as:
+\begin{equation}
+\label{deqn_Ltotal}
+L_{total} = L_{bce} + \lambda L_{freq}
+\end{equation}
+where $\lambda$ is a balancing parameter.
+
+\vspace{-5pt}
+
+\section{Experiments} 
+
+\subsection{Datasets and Implementation Details}
+\textit{1) Datasets:} FACDNet is evaluated on three high-resolution remote sensing benchmarks. LEVIR-CD~\cite{chen2020spatial} contains 633 image pairs ($1024 \times 1024$, 0.5~m) that focus on building changes. WHU-CD~\cite{ji2018fully} consists of aerial building imagery with a higher resolution of 0.3~m. SYSU-CD~\cite{shi2021deeply} features 20,000 pairs ($256 \times 256$, 0.5~m) of complex urban scenes. It encompasses diverse change types including vegetation, road expansion, and construction groundwork, posing challenges in distinguishing targets with irregular shapes and varied semantics.
+
+\textit{2) Implementation Details:} Experiments were conducted on NVIDIA RTX 3090 GPUs using PyTorch. Data augmentation included geometric flips and photometric distortions. The AdamW optimizer is utilized with a weight decay of $0.01$ and betas of $(0.9, 0.999)$. The learning rate was initialized at $2 \times 10^{-4}$ and linearly decayed over 300 epochs with a batch size of 16. The balance parameter $\lambda$ in the loss function was set to 0.1.
+
+\vspace{-10pt}
+\subsection{Comparative Experiments}
+In this section, FACDNet is compared with state-of-the-art methods, including CNN-based (FC-EF, Siam-diff, Siam-conc~\cite{daudt2018fully}, DTCDSCN~\cite{liu2020building}) and Transformer-based or lightweight approaches (ChangeFormer~\cite{bandara2022transformer}, BIT~\cite{chen2021remote}, ELGCNet~\cite{noman2024elgc}).
+
+As detailed in Table \ref{tab:comparison}, FACDNet achieves consistent state-of-the-art performance across all metrics. Specifically, on the LEVIR-CD and WHU-CD datasets, FACDNet achieves the highest F1 scores of $91.71\%$ and $91.02\%$, respectively, along with the best IoU values, outperforming competitive baselines such as ELGCNet and DTCDSCN. Notably, on the challenging SYSU-CD dataset (characterized by complex urban scenes), our method outperforms the second-best ELGCNet by significant margins in both F1-score and Recall. This indicates superior robustness against seasonal variations compared to pure Transformer baselines.
+The visual comparisons in Fig. \ref{fig_3} corroborate the quantitative results. Although competing methods often produce fragmented predictions in regions with phenological shifts, FACDNet effectively suppresses such pseudo-changes and delineates object boundaries with higher fidelity, verifying the efficacy of the frequency-aware strategy.
+
+\vspace{-10pt}
+
+\subsection{Ablation Studies}
+Ablation studies are conducted on the LEVIR-CD dataset to verify component efficacy and parameter sensitivity.
+
+\vspace{-5pt}
+
+\begin{table}[h!]
+\caption{SENSITIVITY ANALYSIS OF THE HYPERPARAMETER $\lambda$ IN THE LOSS FUNCTION ON LEVIR-CD DATASET \label{tab:lambda_ablation}}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{0pt} 
+\renewcommand{\arraystretch}{0.5}
+
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}} @{\hspace{2em}} c c c c c @{\hspace{2em}} }
+\toprule
+\multirow{2}{*}{\textbf{$\lambda$ Value}} & \multicolumn{4}{c}{\textbf{Metrics (\%)}} \\
+\cmidrule(l){2-5} 
+ & Pre & Rec & F1 & IoU \\
+\midrule
+0.001 & 92.60 & 90.48 & 91.53 & 84.38 \\
+0.01 & 92.73 & 90.48 & 91.59 & 84.49 \\
+0.05 & 92.44 & 90.58 & 91.50 & 84.33 \\
+0.1 & 92.67 & \textbf{90.75} & \textbf{91.71} & \textbf{84.68}\\
+0.5 & 92.72 & 90.64 & 91.67 & 84.63 \\
+1.0 & \textbf{92.81} & 90.45 & 91.61 & 84.53 \\
+\bottomrule
+\end{tabular*}
+\vspace{-5pt}
+\end{table}
+
+\textit{1) Impact of Hyperparameter $\lambda$:}
+The parameter $\lambda$ balances the auxiliary Wavelet Loss. $\lambda$ is varied from $0.001$ to $1.0$ (Table \ref{tab:lambda_ablation}). Performance peaks at $\lambda = 0.1$. Larger weights (e.g., $\lambda = 1.0$) enforce stricter boundary constraints, maximizing Precision but penalizing Recall, leading to a suboptimal F1 score. Thus, $\lambda = 0.1$ is adopted.
+
+\vspace{-5pt}
+
+\begin{table}[h!]
+  \centering
+  \caption{ABLATION STUDY OF KEY COMPONENTS ON LEVIR-CD DATASET}
+  \label{tab:ablation_clean}
+  \footnotesize 
+  \renewcommand{\arraystretch}{1.2}
+  
+  \setlength{\tabcolsep}{10pt}
+  \renewcommand{\arraystretch}{0.5}
+
+  \begin{tabular}{cccc @{\hspace{1cm}} cc}
+    \toprule
+    
+    \multicolumn{4}{c}{\textbf{Configuration}} & \multicolumn{2}{c}{\textbf{Metrics (\%)}} \\
+    
+    \cmidrule(r){1-4} \cmidrule(l){5-6}
+    
+    Base & FDAM & FAFM & CAGM & F1 & IoU \\
+    \midrule
+    
+    \checkmark & & & & 89.83 & 81.54 \\
+    \checkmark & & \checkmark & \checkmark & 90.40 & 82.48 \\
+    \checkmark & \checkmark & & \checkmark & 91.58 & 84.47 \\
+    \checkmark & \checkmark & \checkmark & & 91.44 & 84.23\\
+    \checkmark & \checkmark & \checkmark & \checkmark & \textbf{91.71} & \textbf{84.68}\\
+    
+    \bottomrule
+  \end{tabular}
+\vspace{-5pt}
+\end{table}
+
+\textit{2) Analysis of Core Components:}
+Table \ref{tab:ablation_clean} validates the contribution of each module. The Baseline (a plain Siamese Transformer without proposed modules) yields the lowest IoU, indicating that basic feature extraction is insufficient for complex scenes. Integrating FDAM effectively mitigates non-semantic style discrepancies, while adding FAFM and CAGM further boosts the F1 score to $91.71\%$. The results confirm that these components function synergistically: FDAM aligns distributions, FAFM filters noise, and CAGM enforces consistency, all of which are essential for precise change detection.
+
+\vspace{-5pt}
+
+\section{Conclusion}
+In this letter, we proposed a novel Feature-Aligned and Frequency-Aware Network (FACDNet) for robust change detection of high-resolution remote sensing imagery. The Feature Distribution Alignment Module (FDAM), integrated within the Siamese encoder, aligns feature distributions to eliminate non-semantic style discrepancies, while the Frequency-domain Adaptive Filtering Module (FAFM) utilizes the wavelet transform to effectively disentangle real changes from environmental noise. Furthermore, the Change Attention Guidance Module (CAGM) ensures reliable detection through cross-domain consistency verification. Extensive experiments on three benchmark datasets demonstrate that FACDNet outperforms state-of-the-art methods, exhibiting superior robustness against complex radiometric inconsistencies and precise boundary delineation.
+
+
+\vspace{-10pt}
+
+% \begin{thebibliography}{1}
+\bibliographystyle{IEEEtran}
+\bibliography{ref}
+
+% \end{thebibliography}
+\end{document}

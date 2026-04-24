@@ -6,7 +6,7 @@ import numpy as np
 # ==================== 1. 配置区域 (只需修改这里) ====================
 
 # [设置] 每一列的顶部标题
-COL_HEADERS = ["T1 image", "T2 image", "FC-EF", "Siam-diff", "Siam-conc", "ChangeFormer", "BIT", "DTCDSCN", "ELGCNet", "FACDNet", "Label"]
+COL_HEADERS = ["T1 image", "T2 image", "FC-EF", "Siam-diff", "Siam-conc", "ChangeFormer", "BIT", "DTCDSCN", "ELGCNet", "FACDNet", "Ground Truth"]
 
 # [设置] 左侧数据集名称 (只写名字即可)
 DATASET_NAMES = ["SYSU-CD", "WHU-CD", "LEVIR-CD"]
@@ -248,7 +248,7 @@ def plot_centered_grid():
                  fontweight=LABEL_WEIGHT)
 
     # 保存
-    save_path = "/mnt/data1/gyf/code/newtest/ChangeFormer/ooutputdir/Apple/manual_grid_result5.png"
+    save_path = "/mnt/data1/gyf/code/newtest/ChangeFormer/ooutputdir/Apple/manual_grid_result6.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"完成！已保存为: {save_path}")
     plt.show()
